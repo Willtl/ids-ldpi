@@ -30,5 +30,5 @@ class Options:
         self.parser.add_argument('--w_con', type=float, default=50.0, help='Weight for reconstruction loss. default=50')
         self.parser.add_argument('--w_lat', type=float, default=1.0, help='Weight for latent space loss. default=1')
 
-    def parse(self):
+    def parse_options(self):
         return self.parser.parse_args()

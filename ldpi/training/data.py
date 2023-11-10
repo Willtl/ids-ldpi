@@ -1,139 +1,129 @@
 import os
+from typing import Callable, Tuple
+from typing import List, Optional
 
 import numpy as np
 import pandas as pd
 import torch
 from sklearn.model_selection import train_test_split
-from torch.utils.data import DataLoader
-from torch.utils.data import Dataset
+from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
+
+# Type aliases for clarity (compatible with Python 3.8)
+ArrayFloat = np.ndarray
+ArrayInt = np.ndarray
+DataFrame = pd.DataFrame
+DataLoaderType = DataLoader
 
 
 class CustomDataset(Dataset):
-    def __init__(self, samples, targets, bin_targets):
+    """
+        Custom dataset class for handling samples and targets.
+    """
+
+    def __init__(self, samples: ArrayFloat, targets: ArrayInt, bin_targets: ArrayInt):
         self.samples = samples
         self.targets = targets
         self.bin_targets = bin_targets
         self.n_samples = samples.shape[0]
 
-    def __getitem__(self, index):
+    def __getitem__(self, index: int) -> Tuple[ArrayFloat, int, int]:
         return self.samples[index], self.targets[index], self.bin_targets[index]
 
-    def __len__(self):
+    def __len__(self) -> int:
         return self.n_samples
 
 
-def make_weights_for_balanced_classes(targets):
-    # Only two classes: 1 (benign) and -1 (malicious)
-    count = {
-        1: 0,  # benign
-        -1: 0  # malicious
-    }
-
+def make_weights_for_balanced_classes(targets: ArrayInt) -> List[float]:
+    """
+        Create weights for balanced class sampling.
+    """
+    count = {1: 0, -1: 0}
     for item in targets:
         count[item] += 1
 
     N = float(sum(count.values()))
+    weight_per_class = {1: N / float(count[1]) if count[1] > 0 else 0,
+                        -1: N / float(count[-1]) if count[-1] > 0 else 0}
 
-    # Compute the weights
-    weight_per_class = {
-        1: N / float(count[1]) if count[1] > 0 else 0,
-        -1: N / float(count[-1]) if count[-1] > 0 else 0
-    }
-
-    weight = [0] * len(targets)
-    for idx, val in enumerate(targets):
-        weight[idx] = weight_per_class[val]
-
-    return weight
+    return [weight_per_class[val] for val in targets]
 
 
-def get_loaders(dataset='gaussian'):
-    samples, targets, bin_targets, test_samples, test_targets, test_bin_targets = load_data(dataset)
-    print(f'{samples.shape[0]} samples')
+def load_data_from_folder(dataset_name: str, category: str, counter: int) -> int:
+    """
+    Load data from subdirectories in a folder, normalizing and structuring it.
 
-    train_ds = CustomDataset(samples, targets, bin_targets)
-    test_ds = CustomDataset(test_samples, test_targets, test_bin_targets)
+    Args:
+        dataset_name (str): Name of the dataset directory.
+        category (str): Category to load ('benign' or 'malicious').
+        samples (List[ArrayFloat]): List to append loaded samples.
+        targets (List[ArrayInt]): List to append corresponding targets.
+        counter (int): Starting label counter.
 
-    # Compute weights for balanced sampling
-    weights = make_weights_for_balanced_classes(bin_targets)  # Assuming two classes: benign (1) and malicious (-1)
-    weights = torch.DoubleTensor(weights)  # Convert to DoubleTensor
-    sampler = torch.utils.data.sampler.WeightedRandomSampler(weights, len(weights))
+    Returns:
+        int: Updated label counter after processing the category.
+    """
+    samples: List[ArrayFloat] = []
+    targets: List[ArrayInt] = []
 
-    # Create the DataLoader with the sampler for the training set
-    train_loader = DataLoader(dataset=train_ds, batch_size=64, sampler=sampler, drop_last=True, pin_memory=True, num_workers=1, persistent_workers=True)
+    parent_path = os.path.join('samples', dataset_name, 'pcap', category)
 
-    # No sampler for the test set
-    test_loader = DataLoader(dataset=test_ds, batch_size=64, shuffle=False, drop_last=False, pin_memory=True)
-
-    return test_samples, test_targets, train_loader, test_loader
-
-
-def get_pretrain(dataset):
-    train_samples, train_targets, train_bin_targets, _, _, _ = load_data(dataset, only_normal=True)
-    print(f'Pretraining with {train_samples.shape[0]} samples')
-
-    train_ds = CustomDataset(train_samples, train_targets, train_bin_targets)
-
-    pretrain_loader = DataLoader(dataset=train_ds, batch_size=64, shuffle=True, drop_last=True, pin_memory=True)
-    return pretrain_loader
-
-
-def load_data_from_folder(dataset_name, parent_folder, samples, targets, counter):
-    parent_path = f'samples/{dataset_name}/{parent_folder}/'
-
-    # Loop through the folders e.g., audio, video, etc.
+    # Loop through subdirectories
     for traffic_type in os.listdir(parent_path):
         traffic_path = os.path.join(parent_path, traffic_type)
 
-        # Dive one layer deeper e.g., audio/audio, video/http, etc.
         for sub_traffic_type in os.listdir(traffic_path):
             sub_traffic_path = os.path.join(traffic_path, sub_traffic_type)
+            print(sub_traffic_path)
 
-            folder_data: np.ndarray = None
-            for i in os.listdir(sub_traffic_path):
-                if i.endswith('.npy'):
-                    if folder_data is None:
-                        folder_data = np.load(os.path.join(sub_traffic_path, i)).reshape(1, -1)
-                    else:
-                        data = np.load(os.path.join(sub_traffic_path, i)).reshape(1, -1)
-                        folder_data = np.concatenate((folder_data, data))
+            folder_data: Optional[ArrayFloat] = None
+            for file_name in os.listdir(sub_traffic_path):
+                if file_name.endswith('.npy'):
+                    data = np.load(os.path.join(sub_traffic_path, file_name)).reshape(1, -1)
+                    folder_data = data if folder_data is None else np.concatenate((folder_data, data))
 
-            # If no .npy files were found in the folder, skip to the next folder.
             if folder_data is None:
                 continue
 
-            # Cast to float32 and normalize in [0, 1]
             folder_data = folder_data.astype(np.float32) / 255.0
             samples.append(folder_data)
             labels = np.ones(folder_data.shape[0]) * counter
             targets.append(labels)
             counter += 1
-    return counter
+    return counter, samples, targets
 
 
-def load_data(dataset, test_size=0.30, only_normal=False):
-    dataset_name, benign, malware = dataset()
-    print(dataset_name, benign, malware)
+def load_data(dataset: str, test_size: float = 0.30, only_normal: bool = False) -> Tuple[ArrayFloat, ArrayInt, ArrayInt, ArrayFloat, ArrayInt, ArrayInt]:
+    """
+    Load and split data into training and testing sets.
 
-    label_counter = 0
-    benign_data, benign_labels, malware_data, malware_labels = [], [], [], []
+    Args:
+        dataset (str): The dataset name.
+        test_size (float, optional): The proportion of the dataset to include in the test split. Defaults to 0.30.
+        only_normal (bool, optional): If True, only load normal data. Defaults to False.
 
-    label_counter = load_data_from_folder(dataset_name, 'benign', benign_data, benign_labels, label_counter)
-    normal = np.array(np.concatenate(benign_data)).astype(np.float32)
-    normal_targets = np.array(np.concatenate(benign_labels)).astype(np.int)
+    Returns:
+        Tuple[ArrayFloat, ArrayInt, ArrayInt, ArrayFloat, ArrayInt, ArrayInt]: Train samples, train targets, train binary targets,
+                                                                               test samples, test targets, test binary targets.
+    """
 
-    load_data_from_folder(dataset_name, 'malicious', malware_data, malware_labels, label_counter)
-    anomaly = np.array(np.concatenate(malware_data)).astype(np.float32)
-    anomaly_targets = np.array(np.concatenate(malware_labels)).astype(np.int)
+    label_counter, benign_data, benign_labels = load_data_from_folder(dataset, 'benign', counter=0)
 
-    data = np.concatenate((normal, anomaly))
-    targets = np.concatenate((normal_targets, anomaly_targets))
-    bin_targets = np.concatenate((np.ones(normal.shape[0]), np.ones(anomaly.shape[0]) * -1))
+    if not only_normal:
+        label_counter, malware_data, malware_labels = load_data_from_folder(dataset, 'malicious', counter=label_counter)
+        anomaly = np.concatenate(malware_data).astype(np.float32)
+        anomaly_targets = np.concatenate(malware_labels).astype(np.int)
+    else:
+        anomaly = np.array([]).astype(np.float32)
+        anomaly_targets = np.array([]).astype(np.int)
 
-    df = pd.DataFrame()
-    df['sample'] = data.tolist()
-    df['target'] = targets
-    df['bin_target'] = bin_targets
+    normal = np.concatenate(benign_data).astype(np.float32)
+    normal_targets = np.concatenate(benign_labels).astype(np.int)
+
+    data = np.concatenate((normal, anomaly)) if not only_normal else normal
+    targets = np.concatenate((normal_targets, anomaly_targets)) if not only_normal else normal_targets
+    bin_targets = np.concatenate((np.ones(normal.shape[0]), -np.ones(anomaly.shape[0]))) if not only_normal else np.ones(normal.shape[0])
+
+    df = pd.DataFrame({'sample': data.tolist(), 'target': targets, 'bin_target': bin_targets})
 
     if only_normal:
         df = df[df['bin_target'] == 1]
@@ -148,3 +138,49 @@ def load_data(dataset, test_size=0.30, only_normal=False):
     test_bin_targets = np.array(test['bin_target'].tolist()).astype(np.int)
 
     return train_samples, train_targets, train_bin_targets, test_samples, test_targets, test_bin_targets
+
+
+def get_loaders(dataset: Callable, batch_size: int = 64) -> Tuple[ArrayFloat, ArrayInt, DataLoaderType, DataLoaderType]:
+    """
+    Prepare DataLoader for training and testing datasets.
+
+    Args:
+        dataset (Callable): A function to load and return dataset.
+        batch_size (int, optional): Batch size for DataLoader. Defaults to 64.
+
+    Returns:
+        Tuple containing test samples, test targets, training DataLoader, and testing DataLoader.
+    """
+    train_samples, train_targets, train_bin_targets, test_samples, test_targets, test_bin_targets = load_data(dataset)
+    print(f'{train_samples.shape[0]} training samples')
+
+    train_ds = CustomDataset(train_samples, train_targets, train_bin_targets)
+    test_ds = CustomDataset(test_samples, test_targets, test_bin_targets)
+
+    weights = make_weights_for_balanced_classes(train_bin_targets)
+    sampler = WeightedRandomSampler(torch.DoubleTensor(weights), len(weights))
+
+    train_loader = DataLoader(dataset=train_ds, batch_size=batch_size, sampler=sampler, drop_last=True, pin_memory=True, num_workers=1, persistent_workers=True)
+    test_loader = DataLoader(dataset=test_ds, batch_size=batch_size, shuffle=False, drop_last=False, pin_memory=True)
+
+    return test_samples, test_targets, train_loader, test_loader
+
+
+def get_pretrain(dataset: str, batch_size: int = 64) -> DataLoaderType:
+    """
+        Prepare DataLoader for pretraining with normal samples only.
+
+    Args:
+        dataset (Callable): A function to load and return dataset.
+        batch_size (int, optional): Batch size for DataLoader. Defaults to 64.
+
+    Returns:
+        DataLoader for pretraining.
+    """
+    train_samples, train_targets, train_bin_targets, _, _, _ = load_data(dataset, only_normal=True)
+    print(f'Pretraining with {train_samples.shape[0]} normal samples')
+
+    train_ds = CustomDataset(train_samples, train_targets, train_bin_targets)
+    pretrain_loader = DataLoader(dataset=train_ds, batch_size=batch_size, shuffle=True, drop_last=True, pin_memory=True)
+
+    return pretrain_loader

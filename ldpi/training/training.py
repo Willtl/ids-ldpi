@@ -10,6 +10,7 @@ import data
 import utils
 from ldpi.options import Options
 from network import MLP
+from options import Options as SnifferOptions
 
 random.seed(0)
 torch.manual_seed(0)
@@ -206,22 +207,18 @@ def test(net, loader, c, device, plot=False):
 
 def main():
     epochs_pre, epochs_tra = 250, 500
-    args = Options().parse()
+    args = Options().parse_options()
+    general_args = SnifferOptions().parse_options()
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # Simple MLP with a symmetric decoder for pretraining
     net = MLP(input_size=args.n * args.l, num_features=512, rep_dim=128, device=device)
 
-    # net = OneDCNN(input_size=args.n * args.l, nz=50)
-
-    # dataset = utils.get_dataset_local
-    dataset = utils.get_dataset_local
-
-    pretrain_loader = data.get_pretrain(dataset=dataset)
+    pretrain_loader = data.get_pretrain(dataset='TII-SSRC-23')
     c = pretrain(net, pretrain_loader, device, epochs=epochs_pre)
 
     # Generate data, create datasets and dataloaders
-    test_samples, test_targets, train_loader, test_loader = data.get_loaders(dataset=dataset)
+    test_samples, test_targets, train_loader, test_loader = data.get_loaders(dataset=general_args.dataset_path)
 
     # Pretrain, compute c, and train network
     train(net, train_loader, test_loader, c, device, epochs=epochs_tra)
