@@ -3,7 +3,7 @@ import argparse
 
 class Options:
     def __init__(self):
-        self.dataset_path: str = 'data/TII-SSRC-23'
+        self.dataset_path: str = '../../datasets/TII-SSRC-23/pcap/'
         self.json_path: str = ''
         self.precision_floats: int = 4
         self.delay: bool = False

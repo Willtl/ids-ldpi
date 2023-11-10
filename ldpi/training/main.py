@@ -1,23 +1,16 @@
-import time
-
-# from file_sniffer import SnifferFile
 from file_sniffer import SnifferPcap
 from options import Options as SnifferOptions
 from preprocessing import LDPIPreProcessing
 
 
 def main():
-    # Preprocessing dataset
+    # Process PCAP into network flow samples
     sniffer_args = SnifferOptions()
     fsnf = SnifferPcap(sniffer_args)
     fsnf.subscribers.append(LDPIPreProcessing())
-    fsnf.start()
+    fsnf.run()
 
-    while True:
-        if fsnf.stopped():
-            fsnf.join()
-            fsnf.terminate()
-        time.sleep(0.5)
+    # Train it
 
 
 if __name__ == '__main__':

@@ -1,77 +1,110 @@
 import os
 from queue import Queue
-from typing import Dict
+from typing import Dict, Tuple, List
 
 import dpkt
 import numpy as np
 from sklearn.metrics import accuracy_score
 
 from ldpi.options import Options
-from utils import SnifferSubscriber, Color, flow_key_to_str
+from utils import SnifferSubscriber
 
 
 class LDPIPreProcessing(SnifferSubscriber):
-
-    def __init__(self):
+    def __init__(self) -> None:
         super(LDPIPreProcessing, self).__init__()
         self.args = Options().parse()
-        self.flows_tcp: Dict[tuple, int] = {}
-        self.flows_udp: Dict[tuple, int] = {}
-        self.c_tcp: Dict[tuple, int] = {}
-        self.c_udp: Dict[tuple, int] = {}
+        self.flows_tcp: Dict[Tuple[bytes, int, bytes, int], List[bytes]] = {}
+        self.flows_udp: Dict[Tuple[bytes, int, bytes, int], List[bytes]] = {}
+        self.c_tcp: Dict[Tuple[bytes, int, bytes, int], bool] = {}
+        self.c_udp: Dict[Tuple[bytes, int, bytes, int], bool] = {}
         self.to_process: Queue = Queue()
-        self.sample_counter = 0
-        self.current_path = ""
+        self.sample_counter: int = 0
+        self.current_path: str = ""
 
     def run(self) -> None:
         pass
 
-    def new_packet(self, flow_key: tuple, protocol: int, timestamp: int, ip: dpkt.ip.IP) -> None:
-        # Buffer of flows and checked flows of given protocol
-        flows, c_flows = self.get_buffers(protocol)
+    def new_packet(self, flow_key: Tuple[bytes, int, bytes, int], protocol: int, timestamp: int, ip: dpkt.ip.IP) -> None:
+        """
+        Processes a new packet and determines if it should be added to a flow for analysis.
 
-        # Remove flow data from memory and drop FIN packet
-        if protocol == 6 and ip.data.flags & dpkt.tcp.TH_FIN:
-            self.teardown(flow_key, protocol)
+        Parameters:
+            flow_key: The unique identifier of the flow.
+            protocol: The protocol number (e.g., TCP=6, UDP=17).
+            timestamp: The timestamp of the packet.
+            ip: The IP layer of the packet.
+        """
+        flows, checked_flows = self.get_buffers(protocol)
+
+        # Early exit conditions
+        if self._should_drop_packet(protocol, ip, flow_key, checked_flows):
             return
 
-        # Drop packet in case packet's flow is already checked
-        if c_flows.get(flow_key, False):
-            return
+        # Extract packet bytes, anonymize if necessary
+        ip_bytes = self._anonymize_packet(ip)
 
-        # Drop in case of reset ack
-        if protocol == 6 and ip.data.flags & dpkt.tcp.TH_RST and ip.data.flags & dpkt.tcp.TH_ACK:
-            return
+        # Manage flow
+        flow = flows.setdefault(flow_key, [])
+        flow.append(ip_bytes)
 
-        # Remove IP bytes from packet to anonymize it (from 12th to 20th octet)
+        # When a flow reaches the desired packet count (n)
+        if len(flow) == self.args.n:
+            checked_flows[flow_key] = True  # Mark flow as checked
+            self.to_process.put((flow_key, flow))
+            del flows[flow_key]  # Remove flow to free up memory
+
+    def _anonymize_packet(self, ip: dpkt.ip.IP) -> bytes:
+        """
+        Anonymizes an IP packet by removing certain bytes.
+
+        Parameters:
+            ip: The IP layer of the packet.
+
+        Returns:
+            Anonymized bytes of the packet.
+        """
         ip_bytes = bytes(ip)
 
-        # Create/append packet to the flow buffer (this assumes that args.n is higher than 1)
-        flow = flows.get(flow_key, False)
-        if flow:
-            flow.append(ip_bytes)
-        else:
-            flows[flow_key] = [ip_bytes]
-            flow = flows[flow_key]
+        # IP header is the first 20 bytes of the IP packet
+        # Source IP is at bytes 12-15 and Destination IP is at bytes 16-19
+        # We remove these bytes to anonymize the packet
+        anonymized_ip_bytes = ip_bytes[:12] + ip_bytes[20:]
 
-        # Check if data is enough to process it
-        if len(flow) == self.args.n:
-            c_flows[flow_key] = True
-            self.to_process.put((flow_key, flow))
-            flows.pop(flow_key, False)
+        return anonymized_ip_bytes
 
-            # Print
-            if False:
-                str_key = flow_key_to_str(flow_key)
-                print(Color.OKBLUE + f'{str_key} waiting detection ({self.to_process.qsize()})' + Color.ENDC)
+    def _should_drop_packet(self, protocol: int, ip: dpkt.ip.IP, flow_key: Tuple[bytes, int, bytes, int], checked_flows: Dict) -> bool:
+        """
+        Determines if a packet should be dropped based on various conditions.
+
+        Parameters:
+            protocol: The protocol number of the packet.
+            ip: The IP layer of the packet.
+            flow_key: The flow key associated with the packet.
+            checked_flows: Dictionary tracking checked flows.
+
+        Returns:
+            A boolean indicating whether the packet should be dropped.
+        """
+        # Drop packet if it's part of a flow that's already processed
+        if checked_flows.get(flow_key, False):
+            return True
+
+        # For TCP packets, drop on FIN or RST-ACK flags
+        if protocol == 6:
+            tcp_flags = ip.data.flags
+            if tcp_flags & dpkt.tcp.TH_FIN or (tcp_flags & dpkt.tcp.TH_RST and tcp_flags & dpkt.tcp.TH_ACK):
+                return True
+
+        return False
 
     # Remove flows entries in case of teardown
     def teardown(self, flow_key: tuple, protocol: int) -> None:
         # Buffer of flows and checked flows of given protocol
-        flows, c_flows = self.get_buffers(protocol)
+        flows, checked_flows = self.get_buffers(protocol)
         removed_flows = flows.pop(flow_key, False)
-        removed_c_flows = c_flows.pop(flow_key, False)
-        # if removed_flows or removed_c_flows:
+        removed_checked_flows = checked_flows.pop(flow_key, False)
+        # if removed_flows or removed_checked_flows:
         #     str_key = flow_key_to_str(flow_key)
         #     print(Color.UNDERLINE + f'{str_key} teardown ({self.to_process.qsize()})' + Color.ENDC)
 

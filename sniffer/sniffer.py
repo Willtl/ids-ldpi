@@ -5,8 +5,8 @@ import time
 from typing import List, Optional, Tuple, Dict
 
 import dpkt
-import netifaces as ni
-import pcap  # this comes from python-libpcap library
+# import netifaces as ni
+# import pcap  # this comes from python-libpcap library
 from tqdm import tqdm
 
 import utils

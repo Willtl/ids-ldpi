@@ -5,13 +5,15 @@ import socket
 import sys
 import time
 from queue import Queue
-from typing import Dict, Tuple, Set, Any
+from typing import Dict, Set, Optional, Any
+from typing import Tuple, List
 
 import dpkt
 import numpy
 import numpy as np
 import torch
 from sklearn.metrics import accuracy_score
+from torch.nn import Module
 
 from ldpi.networks import MLP
 from ldpi.options import Options
@@ -19,57 +21,44 @@ from utils import SnifferSubscriber, Color, flow_key_to_str
 
 
 class LightDeepPacketInspection(SnifferSubscriber):
-
-    def __init__(self):
+    def __init__(self) -> None:
         super(LightDeepPacketInspection, self).__init__()
         self.args = Options().parse()
 
-        # LDPI related atributes
-        self.model: MLP = None
-        self.backend = 'qnnpack'
-        self.center = None
+        # LDPI related attributes
+        self.model: Optional[Module] = None
+        self.backend: str = 'qnnpack'
+        self.center: Optional[torch.Tensor] = None
         self.device: str = 'cpu'
         self.threshold: float = 0.0
         self.model_loaded: bool = False
 
         # Sniffer related attributes
-        self.flows_tcp: Dict[tuple, int] = {}
-        self.flows_udp: Dict[tuple, int] = {}
-        self.c_tcp: Dict[tuple, int] = {}
-        self.c_udp: Dict[tuple, int] = {}
-        self.black_list: Set = set()
+        self.flows_tcp: Dict[Tuple[bytes, int, bytes, int], int] = {}
+        self.flows_udp: Dict[Tuple[bytes, int, bytes, int], int] = {}
+        self.c_tcp: Dict[Tuple[bytes, int, bytes, int], int] = {}
+        self.c_udp: Dict[Tuple[bytes, int, bytes, int], int] = {}
+        self.black_list: Set[Tuple[bytes, int, bytes, int]] = set()
         self.to_process: Queue = Queue()
 
-        # Initialize model and Pytorch stuff
         self.model_loaded = self.init_model()
 
-        # Socket for demo
-        # self.socket = None
-        # self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        # host = "192.168.1.2"
-        # port = 8800
-        # self.socket.connect((host, port))
-        # self.socket.setblocking(0)
-
     def init_model(self) -> bool:
-        print('init model')
+        print('Initializing model...')
         try:
             self.center = torch.from_numpy(np.load('ldpi/trained_model/center.npy'))
             self.threshold = np.load('ldpi/trained_model/threshold.npy')
 
-            # Instantiate model architecture without trained weightsnan
             self.model = MLP(input_size=self.args.n * self.args.l, num_features=512, rep_dim=50)
             if self.backend == 'qnnpack':
                 torch.backends.quantized.engine = 'qnnpack'
                 self.model = torch.jit.load('ldpi/trained_model/quantized.pt')
             else:
-                self.model.load_state_dict(
-                    torch.load(f'ldpi/trained_model/trained_model.pt', map_location=torch.device(self.device))
-                )
+                self.model.load_state_dict(torch.load('ldpi/trained_model/trained_model.pt', map_location=torch.device(self.device)))
             self.model.eval()
             return True
         except Exception as e:
-            print(f'Exception loading model {e}')
+            print(f'Exception loading model: {e}')
             return False
 
     def run(self) -> None:
@@ -169,44 +158,85 @@ class LightDeepPacketInspection(SnifferSubscriber):
         if removed_flows or removed_c_flows:
             print('teardown ldpi')
 
-    def preprocess_samples(self) -> Tuple[list, list]:
-        # Dequeue all samples for this iteration
-        keys, samples = [], []
-        while not self.to_process.empty():
-            value = self.to_process.get()
-            keys.append(value[0])
-            samples.append(value[1])
+    def preprocess_samples(self, raw_flows: List[List[bytes]]) -> Tuple[List[Tuple[bytes, int, bytes, int]], torch.Tensor]:
+        """
+        Preprocess the raw network flow samples for the neural network.
 
-        # Start preprocessing for the samples set
-        print(Color.OKCYAN + f'Pre-processing {len(samples)} flows' + Color.ENDC)
+        Args:
+            raw_flows (List[List[bytes]]): A list of flows, each a list of packet data as bytes.
 
-        # Create 3-dimensional np array (flow->packet->byte)
+        Returns:
+            Tuple containing:
+                - A list of flow keys.
+                - A tensor of normalized and preprocessed flow data.
+        """
+        # Assuming self.args.n is the number of packets per flow
+        # and self.args.l is the number of bytes to consider from each packet
         sample_size = self.args.n * self.args.l
-        norm_flows = np.zeros([len(samples), sample_size], dtype=np.float32)
+        norm_flows = np.zeros([len(raw_flows), sample_size], dtype=np.float32)
 
-        # Clean/anonymize packets, normalize and trim bytes and fill norm_flows
-        for i in range(len(samples)):
-            flow = samples[i]
-            for j in range(self.args.n):
-                ip = flow[j]
-                anon_ip = ip[:12] + ip[20:]
-                if len(anon_ip) > self.args.l:
-                    anon_ip = anon_ip[:self.args.l]
+        flow_keys = []
+        for i, flow in enumerate(raw_flows):
+            flow_key, packets = flow
+            flow_keys.append(flow_key)
+            preprocessed_packets = []
 
-                np_buff_tmp = np.array(np.frombuffer(bytes(anon_ip), dtype=np.uint8) / 255.0, dtype=np.float32)
-                # If smaller than l pad with zeros, trim otherwise
-                if len(np_buff_tmp) < self.args.l:
-                    np_buff = np.zeros(self.args.l)
-                    np_buff[0:len(np_buff_tmp)] = np_buff_tmp
-                else:
-                    np_buff = np_buff_tmp[:self.args.l]
+            for packet in packets:
+                # Remove IP headers to anonymize
+                anon_packet = self._anonymize_ip(packet)
+                # Ensure the packet is of the length expected by the model
+                packet = self._trim_or_pad_packet(anon_packet, self.args.l)
+                preprocessed_packets.append(packet)
 
-                norm_flows[i][j * self.args.l: (j + 1) * self.args.l] = np_buff
+            # Flatten the list of packets into a single 1D array per flow
+            norm_flows[i] = np.concatenate(preprocessed_packets, axis=0)
 
-        with torch.no_grad():
-            tensor = torch.from_numpy(norm_flows)
+        # Normalize the flows by scaling byte values to the range [0, 1]
+        norm_flows /= 255.0
 
-        return keys, tensor
+        # Convert to a PyTorch tensor
+        tensor_flows = torch.tensor(norm_flows, dtype=torch.float32)
+
+        return flow_keys, tensor_flows
+
+    def _anonymize_ip(self, packet: bytes) -> bytes:
+        """
+        Remove sensitive information from the packet data.
+
+        Args:
+            packet (bytes): The raw packet data.
+
+        Returns:
+            The anonymized packet data.
+        """
+        # Assuming IPv4 and the IP header is always the first 20 bytes of the packet
+        # Remove first 12 bytes (version, IHL, TOS, Total Length, Identification, Flags, Fragment Offset)
+        # and the next 8 bytes (TTL, Protocol, Header Checksum, Source IP, Destination IP)
+        return packet[:12] + packet[20:]
+
+    def _trim_or_pad_packet(self, packet: bytes, desired_length: int) -> np.ndarray:
+        """
+        Trim or pad the packet data to the desired length.
+
+        Args:
+            packet (bytes): The packet data to trim or pad.
+            desired_length (int): The desired length of the packet data.
+
+        Returns:
+            The packet data as an ndarray, trimmed or padded to the desired length.
+        """
+        # Convert packet data to a NumPy array
+        packet_array = np.frombuffer(packet, dtype=np.uint8)
+        # Trim packet if it's longer than the desired length
+        if len(packet_array) > desired_length:
+            return packet_array[:desired_length]
+        # If packet is shorter, pad with zeros
+        elif len(packet_array) < desired_length:
+            padded_array = np.zeros(desired_length, dtype=np.uint8)
+            padded_array[:len(packet_array)] = packet_array
+            return padded_array
+        else:
+            return packet_array
 
     def infer(self, samples) -> numpy.ndarray:
         with torch.no_grad():

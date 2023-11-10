@@ -23,7 +23,5 @@ env/
 # Editor backups
 *~
 
-data/TII-SSRC-23/
-data/USTC-TFC2016/
-data/debug/
-ldpi/samples
+datasets/
+ldpi/training/samples/
