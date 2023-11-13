@@ -16,14 +16,14 @@ from sklearn.metrics import accuracy_score
 from torch.nn import Module
 
 from ldpi.networks import MLP
-from ldpi.options import Options
+from ldpi.ldpioptions import LDPIOptions
 from utils import SnifferSubscriber, Color, flow_key_to_str
 
 
 class LightDeepPacketInspection(SnifferSubscriber):
     def __init__(self) -> None:
         super(LightDeepPacketInspection, self).__init__()
-        self.args = Options().parse()
+        self.args = LDPIOptions().parse()
 
         # LDPI related attributes
         self.model: Optional[Module] = None

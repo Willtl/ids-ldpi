@@ -10,8 +10,8 @@ class Options:
         self.session: bool = False
         self.aggregate_csvs: bool = True
         self.interface: str = 'enp5s0'
-        self.timeout: int = 60
-        self.cleaning_cycle: int = 10
+        self.timeout: int = 120
+        self.cleaning_cycle: int = 60
         self.time_window: int = 60
         self.parse_options()
 

@@ -32,14 +32,11 @@ class SnifferPcap(Sniffer):
         super().__init__(args)
         self.current_pcap_path: str = ''
         self.subscribers: List[LDPIPreProcessing] = []
-        self.max_samples_per_pcap: int = 10000
+        self.max_samples_per_pcap: int = 5000
 
-    def sniff(self, log_periodicity: int = 10000) -> None:
+    def sniff(self) -> None:
         """
         Sniffs packets from a pcap file and processes them.
-
-        Parameters:
-            log_periodicity: How often to log progress (default is 10000 packets).
 
         Raises:
             ValueError: If subscribers list is empty.

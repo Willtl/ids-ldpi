@@ -7,7 +7,7 @@ from torch import nn
 
 import data
 import utils
-from ldpi.options import Options
+from ldpi.ldpioptions import LDPIOptions
 from network import MLP
 from training import test
 
@@ -75,7 +75,7 @@ def main():
     backend = 'qnnpack'
     # backend = 'fbgemm'
 
-    args = Options().parse()
+    args = LDPIOptions().parse()
     device = torch.device('cpu')
 
     dataset = utils.get_dataset_local

@@ -5,226 +5,207 @@ import numpy as np
 import torch
 import torch.optim as optim
 from torch import nn
+from torch.utils.data import DataLoader
 
 import data
 import utils
-from ldpi.options import Options
+from ldpi.ldpioptions import LDPIOptions
 from network import MLP
-from options import Options as SnifferOptions
 
+# Setting seeds for reproducibility
 random.seed(0)
 torch.manual_seed(0)
 np.random.seed(0)
 
 
-def init_center_c(loader, net, device, eps=0.1):
-    n_samples = 0
-    c = torch.zeros(net.rep_dim, device=device)
+class Trainer:
+    def __init__(self, args) -> None:
+        """
+        Initialize the Trainer class.
 
-    net.eval()
-    with torch.no_grad():
-        for inputs, _, _ in loader:
-            inputs = inputs.to(device)
-            outputs = net.encode(inputs)
-            n_samples += outputs.shape[0]
-            c += torch.sum(outputs, dim=0)
+        Args:
+            net (MLP): The neural network model.
+            device (torch.device): The device (CPU or GPU) to use for training.
+        """
+        self.train_loader: DataLoader = None
+        self.test_loader: DataLoader = None
+        self.args: LDPIOptions = args
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.model = MLP(input_size=args.n * args.l, num_features=512, rep_dim=128, device=self.device)
+        self.center = None
 
-    c /= n_samples
+    def init_center_c(self, loader: DataLoader, eps: float = 0.1) -> torch.Tensor:
+        """
+        Initialize the center vector for the network.
 
-    c[(abs(c) < eps) & (c < 0)] = -eps
-    c[(abs(c) < eps) & (c > 0)] = eps
-    print(f'Computed center: {c}')
-    return c
+        Args:
+            loader (DataLoader): The DataLoader for the dataset.
+            eps (float, optional): A small epsilon value to avoid division by zero. Defaults to 0.1.
 
+        Returns:
+            torch.Tensor: The initialized center vector.
+        """
+        n_samples = 0
+        self.center = torch.zeros(self.model.rep_dim, device=self.device)
 
-def pretrain(net, loader, device, epochs=1):
-    opt = optim.Adam(net.parameters(), lr=0.001, weight_decay=1e-6)
-    mse = nn.MSELoss()
+        self.model.eval()
+        with torch.no_grad():
+            for inputs, _, _ in loader:
+                inputs = inputs.to(self.device)
+                outputs = self.model.encode(inputs)
+                n_samples += outputs.shape[0]
+                self.center += torch.sum(outputs, dim=0)
 
-    for i in range(epochs):
-        n_batches, total_loss = 0, 0
-        for inputs, _, _ in loader:
-            inputs = inputs.to(device)
-            opt.zero_grad()
-            outputs = net(inputs)
-            loss = mse(inputs, outputs)
-            total_loss += loss.item()
-            loss.backward()
-            opt.step()
-            n_batches += 1
-        print(f'Pretrain epoch: {i + 1}, mean loss: {total_loss / n_batches}')
+        self.center /= n_samples
 
-    c = init_center_c(loader, net, device)
+        # Apply epsilon threshold
+        self.center[(abs(self.center) < eps) & (self.center < 0)] = -eps
+        self.center[(abs(self.center) < eps) & (self.center > 0)] = eps
+        print(f'Computed center: {self.center}')
 
-    return c
+    def pretrain(self) -> torch.Tensor:
+        """
+        Pretrain the network.
 
+        Args:
+            loader (DataLoader): The DataLoader for the dataset.
+            epochs (int, optional): The number of epochs for pretraining. Defaults to 1.
 
-#
-# def train(net, loader, c, device, epochs=1, eta=1.0, eps=1e-9):
-#     opt = optim.Adam(net.parameters(), lr=3e-4, weight_decay=1e-6)
-#     milestones = [int(epochs * 0.7), int(epochs * 0.8), int(epochs * 0.9)]
-#     scheduler = optim.lr_scheduler.MultiStepLR(opt, milestones=[int(epochs * 0.75), int(epochs * 0.9)], gamma=0.1)
-#
-#     net.train()
-#     for epoch in range(epochs):
-#         epoch_loss = 0.0
-#         n_batches = 0
-#         epoch_start_time = time.time()
-#         for inputs, _, bin_targets in loader:
-#             inputs, bin_targets = inputs.to(device), bin_targets.to(device)
-#
-#             outputs = net.encode(inputs)
-#             dist = torch.sum((outputs - c) ** 2, dim=1)
-#             losses = torch.where(bin_targets == 0, dist, eta * ((dist + eps) ** bin_targets.float()))
-#             loss = torch.mean(losses)
-#
-#             opt.zero_grad()
-#             loss.backward()
-#             opt.step()
-#
-#             epoch_loss += loss.item()
-#             n_batches += 1
-#
-#             scheduler.step()
-#
-#         if epoch in milestones:
-#             print(f'Adjusted learning rate: {float(scheduler.get_last_lr()[0])}')
-#
-#         # log epoch statistics
-#         epoch_train_time = time.time() - epoch_start_time
-#         print(
-#             f'| Epoch: {epoch + 1:03}/{epochs:03} | Train Time: {epoch_train_time:.3f}s | Train Loss: {epoch_loss / n_batches:.6f} |')
-#
-#     return c
+        Returns:
+            torch.Tensor: The center vector computed after pretraining.
+        """
+        # Generate data, create datasets and dataloaders
+        loader = data.get_pretrain_dataloader(dataset='TII-SSRC-23', batch_size=self.args.batch_size)
 
+        opt = optim.Adam(self.model.parameters(), lr=0.001, weight_decay=1e-5)
+        mse = nn.MSELoss()
 
-def train(net, loader, test_loader, c, device, epochs=1, eta=1.0, eps=1e-9):
-    opt = optim.Adam(net.parameters(), lr=3e-4, weight_decay=1e-6)
-    scheduler = optim.lr_scheduler.MultiStepLR(opt, milestones=[int(epochs * 0.75), int(epochs * 0.9)], gamma=0.1)
+        for epoch in range(self.args.pretrain_epochs):
+            n_batches, total_loss = 0, 0
+            for inputs, _, _ in loader:
+                inputs = inputs.to(self.device)
+                opt.zero_grad()
+                outputs = self.model(inputs)
+                loss = mse(inputs, outputs)
+                total_loss += loss.item()
+                loss.backward()
+                opt.step()
+                n_batches += 1
 
-    net.train()
+            print(f'Pretrain epoch: {epoch + 1}, mean loss: {total_loss / n_batches}')
 
-    best_dr = 0.0
-    best_model_state = None
+        self.init_center_c(loader)
 
-    for epoch in range(epochs):
-        epoch_loss = 0.0
-        n_batches = 0
-        epoch_start_time = time.time()
-        for inputs, _, bin_targets in loader:
-            inputs, bin_targets = inputs.to(device), bin_targets.to(device)
+    def train(self, eta=1.0, eps=1e-10, per_validation: int = 5):
+        self.train_loader, self.test_loader = data.get_training_dataloader(dataset='TII-SSRC-23')
 
-            outputs = net.encode(inputs)
-            dist = torch.sum((outputs - c) ** 2, dim=1)
-            losses = torch.where(bin_targets == 0, dist, eta * ((dist + eps) ** bin_targets.float()))
-            loss = torch.mean(losses)
+        opt = optim.Adam(self.model.parameters(), lr=3e-4, weight_decay=1e-6)
+        scheduler = optim.lr_scheduler.MultiStepLR(opt, milestones=[int(self.args.epochs * 0.75), int(self.args.epochs * 0.9)], gamma=0.1)
 
-            opt.zero_grad()
-            loss.backward()
-            opt.step()
+        self.model.train()
 
-            epoch_loss += loss.item()
-            n_batches += 1
+        best_dr = 0.0
+        best_model_state = None
 
-            scheduler.step()
+        for epoch in range(self.args.epochs):
+            epoch_loss = 0.0
+            n_batches = 0
+            epoch_start_time = time.time()
+            for inputs, targets, bin_targets in self.train_loader:
+                inputs, bin_targets = inputs.to(self.device), bin_targets.to(self.device)
 
-        # log epoch statistics
-        epoch_train_time = time.time() - epoch_start_time
-        print(
-            f'| Epoch: {epoch + 1:03}/{epochs:03} | Train Time: {epoch_train_time:.3f}s | Train Loss: {epoch_loss / n_batches:.6f} |')
+                outputs = self.model.encode(inputs)
+                dist = torch.sum((outputs - self.center) ** 2, dim=1)
+                losses = torch.where(bin_targets == 0, dist, eta * ((dist + eps) ** bin_targets.float()))
+                loss = torch.mean(losses)
 
-        # periodic testing
-        if (epoch + 1) % 10 == 0:
-            print("Testing after epoch:", epoch + 1)
-            test_auroc, rec_label, threshold = test(net, test_loader, c, device)
-            if rec_label > best_dr:
-                best_dr = rec_label
-                best_model_state = net.state_dict().copy()
-                print("New best model found!")
+                opt.zero_grad()
+                loss.backward()
+                opt.step()
 
-    if best_model_state:
-        print('Loading best model')
-        net.load_state_dict(best_model_state)
-    return c
+                epoch_loss += loss.item()
+                n_batches += 1
 
+                scheduler.step()
 
-def test(net, loader, c, device, plot=False):
-    net.eval()
-    scores = torch.zeros(size=(len(loader.dataset),), dtype=torch.float32, device=device)
-    labels = torch.zeros(size=(len(loader.dataset),), dtype=torch.long, device=device)
+            # log epoch statistics
+            epoch_train_time = time.time() - epoch_start_time
+            print(f'| Epoch: {epoch + 1:03}/{self.args.epochs:03} | Train Time: {epoch_train_time:.3f}s | Train Loss: {epoch_loss / n_batches:.6f} |')
 
-    with torch.no_grad():
-        for i, (inputs, _, bin_targets) in enumerate(loader):
-            inputs, bin_targets = inputs.to(device), bin_targets.to(device)
+            # periodic testing
+            if (epoch + 1) % per_validation == 0:
+                print("Validation for early stopping at epoch:", epoch + 1)
+                test_auroc, rec_label, threshold = self.test(plot=False, multiclass=False)
+                if rec_label > best_dr:
+                    best_dr = rec_label
+                    best_model_state = self.model.state_dict().copy()
+                    print("New best model found!")
 
-            outputs = net.encode(inputs)
-            # outputs = net(inputs)
+        if best_model_state:
+            print('Loading best model')
+            self.model.load_state_dict(best_model_state)
 
-            dist = torch.sum((outputs - c) ** 2, dim=1)
+    def test(self, plot=False, multiclass=False):
+        self.model.eval()
+        scores = torch.zeros(size=(len(self.test_loader.dataset),), dtype=torch.float32, device=self.device)
+        bin_labels = torch.zeros(size=(len(self.test_loader.dataset),), dtype=torch.long, device=self.device)
+        mult_labels = torch.zeros(size=(len(self.test_loader.dataset),), dtype=torch.long, device=self.device)
 
-            c_targets = torch.where(bin_targets == 1, 0, 1)
+        with torch.no_grad():
+            for i, (inputs, targets, bin_targets) in enumerate(self.test_loader):
+                inputs, targets, bin_targets = inputs.to(self.device), targets.to(self.device), bin_targets.to(self.device)
 
-            scores[i * 64: i * 64 + 64] = dist
-            labels[i * 64: i * 64 + 64] = c_targets
+                outputs = self.model.encode(inputs)
+                # outputs = net(inputs)
 
-    scores = scores.to('cpu').numpy()
-    labels = labels.to('cpu').numpy()
+                dist = torch.sum((outputs - self.center) ** 2, dim=1)
+                c_targets = torch.where(bin_targets == 1, 0, 1)
 
-    auroc = utils.roc(labels, scores, plot=False)
-    print(f'AUROC: {auroc}')
+                scores[i * 64: i * 64 + 64] = dist
+                bin_labels[i * 64: i * 64 + 64] = c_targets
+                mult_labels[i * 64: i * 64 + 64] = targets
 
-    bool_abnormal = labels.astype(bool)
-    bool_normal = ~bool_abnormal
-    normal = scores[bool_normal]
-    threshold = np.percentile(normal, 99.99)
-    threshold = np.max(normal) + (1e-15 * np.max(normal))
+        scores = scores.to('cpu').numpy()
+        bin_labels = bin_labels.to('cpu').numpy()
+        mult_labels = mult_labels.to('cpu').numpy()
 
-    acc, prec, rec, f_score = utils.perf_measure(threshold, labels, scores)
-    prec_label = f"{round((1 - prec) * 100, 5):.5f}%"
-    rec_label = f"{round(rec * 100, 5):.5f}%"
-    print('FAR', prec_label)
-    print('detection rate', rec_label)
-    print('f1', f_score)
+        auroc = utils.roc(scores, bin_labels, plot=False)
+        print(f'AUROC: {auroc}')
 
-    if plot:
-        utils.plot_anomaly_score_dists(test_scores=scores, labels=labels, threshold=np.max(threshold))
+        bool_abnormal = bin_labels.astype(bool)
+        bool_normal = ~bool_abnormal
+        normal = scores[bool_normal]
+        nine_nine_threshold = np.percentile(normal, 99.99)
+        threshold = np.nextafter(nine_nine_threshold, np.inf)
+        # threshold = np.max(normal)
+        # threshold = np.nextafter(threshold, np.inf)
 
-    # Fit a skew normal
-    # ae, loce, scalee = stats.skewnorm.fit(normal)
-    # print(ae, loce, scalee)
-    # r = stats.skewnorm.rvs(a=ae, loc=loce, scale=scalee, size=100000)
-    # print(r.shape)
-    # import matplotlib.pyplot as plt
-    # fig, ax = plt.subplots(1, 1)
-    # ax.hist(r, density=True, bins='auto', histtype='stepfilled', alpha=0.2)
-    # ax.set_xlim([np.min(r), np.max(r)])
-    # ax.legend(loc='best', frameon=False)
-    # plt.show()
-    # print(f'mean {r.mean()}, std {r.std()}, median {np.median(r)}, min {np.min(r)}, max {np.max(r)}')
+        acc, prec, rec, f_score = utils.perf_measure(threshold, bin_labels, scores)
+        prec_label = f"{round((1 - prec) * 100, 5):.5f}%"
+        rec_label = f"{round(rec * 100, 5):.5f}%"
+        print('FAR', prec_label)
+        print('detection rate', rec_label)
+        print('f1', f_score)
 
-    return auroc, rec, threshold
+        if plot:
+            if not multiclass:
+                utils.plot_anomaly_score_dists(test_scores=scores, labels=bin_labels, threshold=np.max(threshold))
+            else:
+                utils.plot_multiclass_anomaly_scores(test_scores=scores, labels=mult_labels, threshold=np.max(threshold))
+
+        return auroc, rec, threshold
+
+    def plot_results(self):
+        pass
 
 
 def main():
-    epochs_pre, epochs_tra = 250, 500
-    args = Options().parse_options()
-    general_args = SnifferOptions().parse_options()
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-    # Simple MLP with a symmetric decoder for pretraining
-    net = MLP(input_size=args.n * args.l, num_features=512, rep_dim=128, device=device)
-
-    pretrain_loader = data.get_pretrain(dataset='TII-SSRC-23')
-    c = pretrain(net, pretrain_loader, device, epochs=epochs_pre)
-
-    # Generate data, create datasets and dataloaders
-    test_samples, test_targets, train_loader, test_loader = data.get_loaders(dataset=general_args.dataset_path)
-
-    # Pretrain, compute c, and train network
-    train(net, train_loader, test_loader, c, device, epochs=epochs_tra)
-
-    # Test network and plot ROC
-    auroc, rec, threshold = test(net, test_loader, c, device, plot=True)
+    args = LDPIOptions().parse_options()
+    trainer = Trainer(args)
+    trainer.pretrain()
+    trainer.train()
+    trainer.plot_results()
+    quit()
 
     # Store model
     net = net.to(torch.device('cpu'))
@@ -235,3 +216,5 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+    # Additional main logic for training and testing would go here

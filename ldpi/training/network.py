@@ -26,8 +26,6 @@ def init_weights(net, init_type='normal', gain=0.02):
     net.apply(init_func)
 
 
-# Simple MLP, decoder is used for pre-training
-
 class MLP(nn.Module):
     def __init__(self,
                  input_size: int,

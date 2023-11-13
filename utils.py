@@ -3,7 +3,6 @@ import glob
 import os
 import socket
 import threading
-import time
 from abc import ABC, abstractmethod
 from enum import Enum
 
@@ -248,7 +247,7 @@ def numpy_folder_to_tensor(path):
         trainImages.append(data)
 
 
-def roc(labels, scores, plot=True):
+def roc(scores, labels, plot=True):
     fpr = dict()
     tpr = dict()
 
@@ -389,6 +388,58 @@ def plot_anomaly_score_dists(test_scores, labels, threshold, add_legend=False):
 
     fig.tight_layout()
     # Uncomment the following line to save the figure, ensure fig_name variable exists
-    plt.savefig(f'experiments/plots/{time.time()}.pdf', bbox_inches='tight', format='pdf', dpi=800)
-    # plt.show()
+    # plt.savefig(f'experiments/plots/{time.time()}.pdf', bbox_inches='tight', format='pdf', dpi=800)
+    plt.show()
+    plt.close(fig)
+
+
+def plot_multiclass_anomaly_scores(test_scores, labels, threshold, add_legend=False):
+    """
+    Plot the anomaly scores for multiclass data, with each class in a different color.
+
+    Args:
+        test_scores (np.ndarray): The anomaly scores.
+        labels (np.ndarray): The multiclass labels.
+        threshold (float): The threshold for anomaly detection.
+        add_legend (bool, optional): Whether to add a legend to the plot. Defaults to False.
+    """
+    unique_labels = np.unique(labels)
+
+    # Define colors for each class - adjust this as needed
+    colors = plt.cm.get_cmap('tab10', len(unique_labels))
+
+    # Define histogram bins
+    bins = np.linspace(np.min(test_scores), np.percentile(test_scores, 99.95), 150)
+
+    # Setup plot
+    plt.style.use('classic')
+    px = 1 / plt.rcParams['figure.dpi']  # pixel in inches
+    fig, ax = plt.subplots(figsize=(650 * px, 200 * px))
+
+    for i, label in enumerate(unique_labels):
+        # Extract scores for the current label
+        class_scores = test_scores[labels == label]
+
+        # Plot histogram for the current label
+        ax.hist(class_scores, bins=bins, label=f'Class {label}' if add_legend else '', linewidth=0, color=colors(i), stacked=True, alpha=0.7)
+
+    # Set various attributes
+    ax.grid(zorder=0)
+    ax.set_axisbelow(True)
+    ax.set_xlim(np.min(test_scores), np.percentile(test_scores, 99.95))
+    ax.set_ylim(bottom=1)
+    ax.set_xlabel('Anomaly Score')
+    ax.set_ylabel(r'# of Samples (log)')
+    ax.set_yscale('log')
+
+    # Threshold annotation
+    plt.axvline(x=threshold, linewidth=1.5, color='#3366cc', linestyle='dashed', label=f'Threshold: {threshold}')
+    text = plt.text(threshold, ax.get_ylim()[0] + 0.5, 'Threshold', rotation=90, size='small', color='black')
+    text.set_path_effects([PathEffects.withStroke(linewidth=1.5, foreground='w')])
+
+    if add_legend:
+        ax.legend()
+
+    fig.tight_layout()
+    plt.show()
     plt.close(fig)
