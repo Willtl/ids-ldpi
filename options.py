@@ -13,6 +13,7 @@ class Options:
         self.timeout: int = 120
         self.cleaning_cycle: int = 60
         self.time_window: int = 60
+        self.debug: bool = True
         self.parse_options()
 
     def parse_options(self) -> 'Options':

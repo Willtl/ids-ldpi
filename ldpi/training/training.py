@@ -1,40 +1,40 @@
-import random
 import time
+from typing import Optional
 
 import numpy as np
 import torch
 import torch.optim as optim
-from torch import nn
+from torch import nn, Tensor
 from torch.utils.data import DataLoader
 
 import data
 import utils
-from ldpi.ldpioptions import LDPIOptions
-from network import MLP
+from ldpi.options_ldpi import LDPIOptions
+from losses import OneClassContrastiveLoss
+from network import MLP, ResCNNContrastive
 
-# Setting seeds for reproducibility
-random.seed(0)
-torch.manual_seed(0)
-np.random.seed(0)
+# Type aliases for clarity
+Device = torch.device
+ModelWeights = dict
 
 
 class Trainer:
-    def __init__(self, args) -> None:
-        """
-        Initialize the Trainer class.
-
-        Args:
-            net (MLP): The neural network model.
-            device (torch.device): The device (CPU or GPU) to use for training.
-        """
-        self.train_loader: DataLoader = None
-        self.test_loader: DataLoader = None
+    def __init__(self, args: LDPIOptions, model_type: str = 'ResCNN') -> None:
+        self.train_loader: Optional[DataLoader] = None
+        self.test_loader: Optional[DataLoader] = None
         self.args: LDPIOptions = args
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.model = MLP(input_size=args.n * args.l, num_features=512, rep_dim=128, device=self.device)
-        self.center = None
+        self.model_type = model_type
+        self.device: Device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        if model_type == 'MLP':
+            self.model: MLP = MLP(input_size=args.n * args.l, num_features=512, rep_dim=128, device=self.device)
+        elif model_type == 'ResCNN':
+            self.model = ResCNNContrastive().to(self.device)
+        else:
+            print('Error no model type found')
 
-    def init_center_c(self, loader: DataLoader, eps: float = 0.1) -> torch.Tensor:
+        self.center: Optional[Tensor] = None
+
+    def init_center_c(self, loader: DataLoader, eps: float = 0.01) -> Tensor:
         """
         Initialize the center vector for the network.
 
@@ -45,22 +45,19 @@ class Trainer:
         Returns:
             torch.Tensor: The initialized center vector.
         """
-        n_samples = 0
         self.center = torch.zeros(self.model.rep_dim, device=self.device)
 
         self.model.eval()
         with torch.no_grad():
-            for inputs, _, _ in loader:
-                inputs = inputs.to(self.device)
-                outputs = self.model.encode(inputs)
-                n_samples += outputs.shape[0]
-                self.center += torch.sum(outputs, dim=0)
+            total_outputs = sum(self.model.encode(inputs.to(self.device)).sum(0) for inputs, *_ in loader)
 
-        self.center /= n_samples
+        n_samples = sum(len(inputs) for inputs, *_ in loader)
+        self.center = total_outputs / n_samples
 
         # Apply epsilon threshold
-        self.center[(abs(self.center) < eps) & (self.center < 0)] = -eps
-        self.center[(abs(self.center) < eps) & (self.center > 0)] = eps
+        # eps_mask = (abs(self.center) < eps)
+        # self.center[eps_mask & (self.center < 0)] = -eps
+        # self.center[eps_mask & (self.center > 0)] = eps
         print(f'Computed center: {self.center}')
 
     def pretrain(self) -> torch.Tensor:
@@ -75,8 +72,42 @@ class Trainer:
             torch.Tensor: The center vector computed after pretraining.
         """
         # Generate data, create datasets and dataloaders
-        loader = data.get_pretrain_dataloader(dataset='TII-SSRC-23', batch_size=self.args.batch_size)
+        loader = data.get_pretrain_dataloader(dataset='TII-SSRC-23', batch_size=self.args.batch_size, contrastive=self.model_type != 'MLP')
 
+        if self.model_type == 'MLP':
+            self._pretrain_ae(loader)
+        elif self.model_type == 'ResCNN':
+            self._pretrain_contrastive(loader)
+
+    def _pretrain_contrastive(self, loader):
+        optimizer = optim.SGD(self.model.parameters(), lr=0.1, weight_decay=0.003)
+        criterion = OneClassContrastiveLoss(tau=0.2)
+
+        for epoch in range(self.args.pretrain_epochs):
+            n_batches, total_loss = 0, 0
+            for v1, v2 in loader:
+                if torch.cuda.is_available():
+                    v1, v2 = v1.cuda(), v2.cuda()
+                v1, v2 = v1.unsqueeze(1), v2.unsqueeze(1)
+
+                concatenated = torch.cat((v1, v2), dim=0)
+                features = self.model(concatenated)
+                features = torch.stack(features.split(features.size(0) // 2), dim=1)
+
+                # Compute loss
+                loss = criterion(features)
+
+                # Zero the gradients before running the backward pass
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+                total_loss += loss
+                n_batches += 1
+
+            print(f'Pretrain epoch: {epoch + 1}, mean loss: {total_loss / n_batches}')
+
+    def _pretrain_ae(self, loader):
         opt = optim.Adam(self.model.parameters(), lr=0.001, weight_decay=1e-5)
         mse = nn.MSELoss()
 
@@ -85,6 +116,8 @@ class Trainer:
             for inputs, _, _ in loader:
                 inputs = inputs.to(self.device)
                 opt.zero_grad()
+                if self.model_type != 'MLP':
+                    inputs = inputs.unsqueeze(1)
                 outputs = self.model(inputs)
                 loss = mse(inputs, outputs)
                 total_loss += loss.item()

@@ -1,5 +1,7 @@
 import torch
+import torch.nn.functional as F
 from torch import nn
+from tsai.models.all import ResCNN
 
 
 def init_weights(net, init_type='normal', gain=0.02):
@@ -27,13 +29,7 @@ def init_weights(net, init_type='normal', gain=0.02):
 
 
 class MLP(nn.Module):
-    def __init__(self,
-                 input_size: int,
-                 num_features: int,
-                 rep_dim: int,
-                 device: torch.device,
-                 bias: bool = True,
-                 num_layers: int = 2) -> None:
+    def __init__(self, input_size: int, num_features: int, rep_dim: int, device: torch.device, bias: bool = True, num_layers: int = 2) -> None:
         super(MLP, self).__init__()
 
         self.input_size = input_size
@@ -46,45 +42,34 @@ class MLP(nn.Module):
 
         self.dropout = nn.Dropout(0.2)
 
-    def _build_encoder(self, input_size: int, num_features: int, rep_dim: int, bias: bool = True, num_layers: int = 2) -> nn.Sequential:
+    def _build_encoder(self, input_size: int, num_features: int, rep_dim: int, num_layers: int = 2) -> nn.Sequential:
         layers = [
             nn.Linear(input_size, num_features, bias=False),  # Exclude bias when using BatchNorm
             nn.BatchNorm1d(num_features),
             nn.ReLU(inplace=True)
         ]
-
         for _ in range(num_layers - 1):
             layers.extend([
                 nn.Linear(num_features, num_features, bias=False),  # Exclude bias when using BatchNorm
                 nn.BatchNorm1d(num_features),
                 nn.ReLU(inplace=True)
             ])
-
-        layers.append(nn.Linear(num_features, rep_dim, bias=bias))
-
+        layers.append(nn.Linear(num_features, rep_dim, bias=True))
         return nn.Sequential(*layers).to(self.device)
 
-    def _build_decoder(self,
-                       input_size: int,
-                       num_features: int,
-                       rep_dim: int,
-                       bias: bool = True,
-                       num_layers: int = 2) -> nn.Sequential:
+    def _build_decoder(self, input_size: int, num_features: int, rep_dim: int, num_layers: int = 2) -> nn.Sequential:
         layers = [
-            nn.Linear(rep_dim, num_features, bias=False),  # Exclude bias when using BatchNorm
+            nn.Linear(rep_dim, num_features, bias=False),
             nn.BatchNorm1d(num_features),
             nn.ReLU(inplace=True)
         ]
-
         for _ in range(num_layers - 1):
             layers.extend([
-                nn.Linear(num_features, num_features, bias=False),  # Exclude bias when using BatchNorm
+                nn.Linear(num_features, num_features, bias=False),
                 nn.BatchNorm1d(num_features),
                 nn.ReLU(inplace=True)
             ])
-
-        layers.append(nn.Linear(num_features, input_size, bias=bias))
-
+        layers.append(nn.Linear(num_features, input_size, bias=True))
         return nn.Sequential(*layers).to(self.device)
 
     def encode(self, x: torch.Tensor) -> torch.Tensor:
@@ -98,58 +83,85 @@ class MLP(nn.Module):
         return self.decode(self.encode(x))
 
 
-class OneDCNN(nn.Module):
-    def __init__(self, input_size, nz, nc=1, nf=16, bias=False):
+class ResCNNContrastive(nn.Module):
+    """A module for supervised contrastive learning."""
+
+    def __init__(self, head='mlp', dim_mid=128, feat_dim=128, verbose=True):
         super().__init__()
-        self.input_size = input_size
-        self.nc = nc
-        self.rep_dim = nz
+        self.dim_mid = dim_mid
+        self.feat_dim = feat_dim
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.linear_size = (nf * 4) * int(input_size / 8)
 
-        self.encoder = nn.Sequential(
-            nn.Conv1d(nc, nf, 4, 2, 1, bias=bias),
-            nn.BatchNorm1d(nf),
-            nn.LeakyReLU(0.2, inplace=True),
+        # Instantiate encoder and head
+        self._create_encoder()
+        self._create_head(head)
 
-            nn.Conv1d(nf, nf * 2, 4, 2, 1, bias=bias),
-            nn.BatchNorm1d(nf * 2),
-            nn.LeakyReLU(0.2, inplace=True),
+        # Print model and size information if verbose is True
+        if verbose:
+            print(self)
+            print(f'Model size: {sum([param.nelement() for param in self.parameters()]) / 1000000} (M)')
 
-            nn.Conv1d(nf * 2, nf * 4, 4, 2, 1, bias=bias),
-            nn.BatchNorm1d(nf * 4),
-            nn.LeakyReLU(0.2, inplace=True),
+    def _create_encoder(self):
+        """Create an encoder model based on the given name and pretrained option."""
+        self.encoder = ResCNN(1, 10, separable=True).to(self.device)
+        self.dim_in = self.encoder.lin.in_features
+        self.encoder.lin = nn.Identity()
 
-            nn.Flatten(),
-            nn.Linear(self.linear_size, nz, bias=bias)
-        ).to(self.device)
+    def _create_head(self, head: str, depth: int = 4):
+        """Create a head model based on the given head type and dimensions."""
 
-        self.decoder = nn.Sequential(
-            nn.Linear(nz, self.linear_size, bias=bias),
-            nn.BatchNorm1d(self.linear_size),
-            nn.ReLU(inplace=True),
-            nn.Unflatten(1, (nf * 4, -1)),
+        layers = []
+        if head == 'linear':
+            layers.append(nn.Linear(self.dim_in, self.feat_dim, bias=True))
+        elif head == 'mlp':
+            layers.extend([
+                nn.Linear(self.dim_in, self.dim_mid, bias=False),
+                nn.BatchNorm1d(self.dim_mid),
+                nn.ReLU(inplace=True)
+            ])
+            for _ in range(depth - 1):
+                layers.extend([
+                    nn.Linear(self.dim_mid, self.dim_mid, bias=False),
+                    nn.BatchNorm1d(self.dim_mid),
+                    nn.ReLU(inplace=True)
+                ])
+            layers.append(nn.Linear(self.dim_mid, self.feat_dim, bias=True))
+        else:
+            raise NotImplementedError(f'Head not supported: {head}')
 
-            nn.ConvTranspose1d(nf * 4, nf * 2, 4, 2, 1, bias=bias),
-            nn.BatchNorm1d(nf * 2),
-            nn.ReLU(inplace=True),
+        self.head = nn.Sequential(*layers)
 
-            nn.ConvTranspose1d(nf * 2, nf, 4, 2, 1, bias=bias),
-            nn.BatchNorm1d(nf),
-            nn.ReLU(inplace=True),
+    def _initialize_weights(self):
+        """Initialize encoder and head weights randomly."""
+        # Apply He (Kaiming) initialization to the encoder layers
+        for layer in self.encoder.modules():
+            if isinstance(layer, (nn.Conv2d, nn.Linear)):
+                nn.init.kaiming_normal_(layer.weight, mode='fan_out', nonlinearity='relu')
+                if layer.bias is not None:
+                    nn.init.constant_(layer.bias, 0)
+            elif isinstance(layer, nn.BatchNorm2d):
+                nn.init.constant_(layer.weight, 1)
+                nn.init.constant_(layer.bias, 0)
 
-            nn.ConvTranspose1d(nf, nc, 4, 2, 1, bias=bias),
-            nn.Sigmoid()
-        ).to(self.device)
-
-        # init_weights(self.encoder, init_type='normal')
-        # init_weights(self.decoder, init_type='normal')
-
-    def encode(self, x):
-        return self.encoder(x.view(x.shape[0], 1, -1))
-
-    def decode(self, x):
-        return self.decoder(x).view(x.shape[0], -1)
+        # Apply Glorot (Xavier) initialization to the head layers
+        for layer in self.head.modules():
+            if isinstance(layer, nn.Linear):
+                nn.init.xavier_uniform_(layer.weight)
+                if layer.bias is not None:
+                    nn.init.constant_(layer.bias, 0)
+            elif isinstance(layer, nn.BatchNorm1d):
+                nn.init.constant_(layer.weight, 1)
+                nn.init.constant_(layer.bias, 0)
 
     def forward(self, x):
-        return self.decode(self.encode(x))
+        """Compute forward pass."""
+
+        feat = self.encoder(x)
+        feat = F.normalize(self.head(feat), dim=1)
+        return feat
+
+    def features(self, x):
+        """Compute features without head."""
+
+        feat = self.encoder(x)
+        return feat

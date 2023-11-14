@@ -6,17 +6,15 @@ from preprocessing import LDPIPreProcessing
 
 
 def main():
-    # Suppose this is your debug flag
-    debug = True
+    # Process PCAP into network flow samples
+    sniffer_args = SnifferOptions()
 
     # Configure logging based on the debug flag
-    if debug:
+    if sniffer_args.debug:
         logging.basicConfig(level=logging.DEBUG)
     else:
         logging.basicConfig(level=logging.INFO)
 
-    # Process PCAP into network flow samples
-    sniffer_args = SnifferOptions()
     fsnf = SnifferPcap(sniffer_args)
     fsnf.subscribers.append(LDPIPreProcessing())
     fsnf.run()

@@ -1,14 +1,14 @@
 import os
+import random
 from typing import List, Optional
 from typing import Tuple
 
 import numpy as np
 import pandas as pd
 import torch
+from scipy.interpolate import interp1d
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
-
-from transform import random_crop_resize, dropout_augmentation
 
 # Type aliases for clarity (compatible with Python 3.8)
 ArrayFloat = np.ndarray
@@ -30,11 +30,100 @@ class CustomDataset(Dataset):
         self.apply_transform = apply_transform
 
     def __getitem__(self, index: int) -> Tuple[ArrayFloat, int, int]:
-        aug = self.samples[index]
-        if self.apply_transform:
-            aug = random_crop_resize(aug)
-            aug = dropout_augmentation(aug, dropout_rate=0.01)
-        return aug, self.targets[index], self.bin_targets[index]
+        return self.samples[index], self.targets[index], self.bin_targets[index]
+
+    def __len__(self) -> int:
+        return self.n_samples
+
+
+class OneClassContrastiveDataset(Dataset):
+    """
+    Custom dataset class for pretraining with one class contrastive.
+    """
+
+    def __init__(self, samples: np.ndarray, targets: np.ndarray, bin_targets: np.ndarray):
+        self.samples = samples
+        self.targets = targets
+        self.bin_targets = bin_targets
+        self.n_samples = samples.shape[0]
+
+        # Create fake outliers
+        self.outlier_noisy = self.inject_random_noise(samples)
+        self.outlier_reversed = self.reverse_sequences(samples)
+        self.outlier_shuffled = self.shuffle_sequences(samples)
+        self.outlier_inverted = self.invert_values(samples)
+
+    def inject_random_noise(self, samples, noise_level=0.05):
+        noise = np.random.uniform(-noise_level, noise_level, samples.shape)
+        noisy_samples = np.clip(samples + noise, 0, 1)
+        return noisy_samples
+
+    def reverse_sequences(self, samples):
+        reversed_samples = np.flip(samples, axis=1)
+        return reversed_samples
+
+    def shuffle_sequences(self, samples):
+        shuffled_samples = np.copy(samples)
+        for s in shuffled_samples:
+            np.random.shuffle(s)
+        return shuffled_samples
+
+    def invert_values(self, samples):
+        inverted_samples = 1 - samples
+        return inverted_samples
+
+    def transform(self, sample):
+        # Randomly select an augmentation to apply
+        augs = [self.temporal_scaling, self.jittering, self.random_segment_permutation]
+        augmented = np.random.choice(augs)(sample)
+        augmented = self.crop_and_resize(augmented)
+        return augmented
+
+    def crop_and_resize(self, sample):
+        original_length = len(sample)
+        scale = np.random.uniform(0.1, 1.0)
+        crop_size = int(original_length * scale)
+        start = np.random.randint(0, len(sample) - crop_size)
+        cropped_sample = sample[start:start + crop_size]
+        # Linear interpolation to resize back to original sequence length
+        return interp1d(np.linspace(0, crop_size - 1, num=crop_size), cropped_sample, kind='linear', fill_value='extrapolate')(np.arange(original_length))
+
+    def temporal_scaling(self, sample):
+        original_length = len(sample)
+        scale = np.random.uniform(0.8, 1.2)  # Adjust scaling factors as needed
+        scaled_length = int(original_length * scale)
+        indices = np.linspace(0, original_length - 1, num=scaled_length)
+        scaled_sample = interp1d(np.arange(original_length), sample, kind='linear')(indices)
+
+        # Adjust the length to match the original length
+        if scaled_length < original_length:
+            # Extend the sequence to the original length
+            additional_indices = np.linspace(scaled_length, original_length - 1, num=original_length - scaled_length)
+            extended_sample = interp1d(np.arange(scaled_length), scaled_sample, kind='linear', fill_value='extrapolate')(additional_indices)
+            return np.concatenate([scaled_sample, extended_sample])
+        else:
+            # Trim the sequence to the original length
+            return scaled_sample[:original_length]
+
+    def jittering(self, sample, noise_level=0.02):
+        noise = np.random.normal(0, noise_level, len(sample))
+        return np.clip(sample + noise, 0, 1)
+
+    def random_segment_permutation(self, sample, num_segments=5):
+        segment_length = len(sample) // num_segments
+        segments = [sample[i * segment_length:(i + 1) * segment_length] for i in range(num_segments)]
+        np.random.shuffle(segments)
+        return np.concatenate(segments)
+
+    def __getitem__(self, index: int) -> Tuple:
+        if random.random() < 0.5:
+            sample = self.samples[index]
+        else:
+            outlier_choice = random.choice([self.outlier_noisy, self.outlier_reversed, self.outlier_shuffled, self.outlier_inverted])
+            sample = outlier_choice[index]
+        v1, v2 = self.transform(sample), self.transform(sample)
+        v1, v2 = torch.from_numpy(v1).float(), torch.from_numpy(v2).float()
+        return v1, v2
 
     def __len__(self) -> int:
         return self.n_samples
@@ -110,7 +199,7 @@ def load_data(dataset: str, test_size: float = 0.20, only_normal: bool = False) 
 
     Returns:
         Tuple[ArrayFloat, ArrayInt, ArrayInt, ArrayFloat, ArrayInt, ArrayInt]: Train samples, train targets, train binary targets,
-                                                                               test samples, test targets, test binary targets.
+        test samples, test targets, test binary targets.
     """
 
     # Assuming load_data_from_folder is a function that loads the data
@@ -182,7 +271,7 @@ def get_training_dataloader(dataset: str, batch_size: int = 64) -> Tuple[ArrayFl
     return train_loader, test_loader
 
 
-def get_pretrain_dataloader(dataset: str, batch_size) -> DataLoaderType:
+def get_pretrain_dataloader(dataset: str, batch_size: int, contrastive: bool = False) -> DataLoaderType:
     """
         Prepare DataLoader for pretraining with normal samples only.
 
@@ -196,7 +285,11 @@ def get_pretrain_dataloader(dataset: str, batch_size) -> DataLoaderType:
     train_samples, train_targets, train_bin_targets, _, _, _ = load_data(dataset, test_size=0.0, only_normal=True)
     print(f'Pretraining with {train_samples.shape[0]} normal samples')
 
-    train_ds = CustomDataset(train_samples, train_targets, train_bin_targets)
+    if contrastive:
+        train_ds = OneClassContrastiveDataset(train_samples, train_targets, train_bin_targets)
+    else:
+        train_ds = CustomDataset(train_samples, train_targets, train_bin_targets)
+
     pretrain_loader = DataLoader(dataset=train_ds, batch_size=batch_size, shuffle=True, drop_last=True, pin_memory=True)
 
     return pretrain_loader
