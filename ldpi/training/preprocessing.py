@@ -6,7 +6,7 @@ import dpkt
 import numpy as np
 from sklearn.metrics import accuracy_score
 
-from ldpi.ldpioptions import LDPIOptions
+from ldpi.options_ldpi import LDPIOptions
 from utils import SnifferSubscriber
 
 

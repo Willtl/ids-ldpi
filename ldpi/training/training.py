@@ -5,6 +5,7 @@ import numpy as np
 import torch
 import torch.optim as optim
 from torch import nn, Tensor
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
 
 import data
@@ -80,10 +81,20 @@ class Trainer:
             self._pretrain_contrastive(loader)
 
     def _pretrain_contrastive(self, loader):
-        optimizer = optim.SGD(self.model.parameters(), lr=0.1, weight_decay=0.003)
+        initial_lr = 0.1
+        warmup_epochs = 100
+        total_epochs = self.args.pretrain_epochs
+        optimizer = optim.SGD(self.model.parameters(), lr=initial_lr, weight_decay=0.0003)
         criterion = OneClassContrastiveLoss(tau=0.2)
+        scheduler = CosineAnnealingLR(optimizer, T_max=total_epochs - warmup_epochs, eta_min=1e-07)
 
-        for epoch in range(self.args.pretrain_epochs):
+        for epoch in range(total_epochs):
+            # Warmup phase
+            if epoch < warmup_epochs:
+                warmup_lr = ((initial_lr - 1e-07) / warmup_epochs) * epoch + 1e-07
+                for param_group in optimizer.param_groups:
+                    param_group['lr'] = warmup_lr
+
             n_batches, total_loss = 0, 0
             for v1, v2 in loader:
                 if torch.cuda.is_available():
@@ -102,10 +113,14 @@ class Trainer:
                 loss.backward()
                 optimizer.step()
 
-                total_loss += loss
+                total_loss += loss.item()
                 n_batches += 1
 
-            print(f'Pretrain epoch: {epoch + 1}, mean loss: {total_loss / n_batches}')
+            # Update the learning rate with cosine annealing after warmup
+            if epoch >= warmup_epochs:
+                scheduler.step()
+
+            print(f'Epoch: {epoch + 1}, LR: {optimizer.param_groups[0]["lr"]}, Mean loss: {total_loss / n_batches}')
 
     def _pretrain_ae(self, loader):
         opt = optim.Adam(self.model.parameters(), lr=0.001, weight_decay=1e-5)
