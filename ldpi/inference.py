@@ -16,7 +16,7 @@ from sklearn.metrics import accuracy_score
 from torch.nn import Module
 
 from ldpi.networks import MLP
-from ldpi.ldpioptions import LDPIOptions
+from ldpi.options_ldpi import LDPIOptions
 from utils import SnifferSubscriber, Color, flow_key_to_str
 
 
