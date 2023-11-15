@@ -22,12 +22,11 @@ class CustomDataset(Dataset):
         Custom dataset class for handling samples and targets.
     """
 
-    def __init__(self, samples: ArrayFloat, targets: ArrayInt, bin_targets: ArrayInt, apply_transform: bool = False):
+    def __init__(self, samples: ArrayFloat, targets: ArrayInt, bin_targets: ArrayInt):
         self.samples = samples
         self.targets = targets
         self.bin_targets = bin_targets
         self.n_samples = samples.shape[0]
-        self.apply_transform = apply_transform
 
     def __getitem__(self, index: int) -> Tuple[ArrayFloat, int, int]:
         return self.samples[index], self.targets[index], self.bin_targets[index]
@@ -259,8 +258,8 @@ def get_training_dataloader(dataset: str, batch_size: int = 64) -> Tuple[ArrayFl
     print(f'{train_samples.shape[0]} training samples')
     print(train_samples.shape, test_samples.shape)
 
-    train_ds = CustomDataset(train_samples, train_targets, train_bin_targets, apply_transform=True)
-    test_ds = CustomDataset(test_samples, test_targets, test_bin_targets, apply_transform=False)
+    train_ds = CustomDataset(train_samples, train_targets, train_bin_targets)
+    test_ds = CustomDataset(test_samples, test_targets, test_bin_targets)
 
     weights = make_weights_for_balanced_classes(train_bin_targets)
     sampler = WeightedRandomSampler(torch.DoubleTensor(weights), len(weights))

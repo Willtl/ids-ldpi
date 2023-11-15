@@ -1,3 +1,4 @@
+import os
 import time
 from typing import Optional
 
@@ -7,6 +8,7 @@ import torch.optim as optim
 from torch import nn, Tensor
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 import data
 import utils
@@ -27,7 +29,7 @@ class Trainer:
         self.model_type = model_type
         self.device: Device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         if model_type == 'MLP':
-            self.model: MLP = MLP(input_size=args.n * args.l, num_features=512, rep_dim=128, device=self.device)
+            self.model: MLP = MLP(input_size=args.n * args.l, num_features=512, feat_dim=128, device=self.device)
         elif model_type == 'ResCNN':
             self.model = ResCNNContrastive().to(self.device)
         else:
@@ -46,11 +48,19 @@ class Trainer:
         Returns:
             torch.Tensor: The initialized center vector.
         """
-        self.center = torch.zeros(self.model.rep_dim, device=self.device)
+        self.center = torch.zeros(self.model.feat_dim, device=self.device)
 
         self.model.eval()
         with torch.no_grad():
-            total_outputs = sum(self.model.encode(inputs.to(self.device)).sum(0) for inputs, *_ in loader)
+            total_outputs = 0
+            for inputs, *_ in loader:
+                inputs = inputs.unsqueeze(1).to(self.device)
+
+                # Encode the inputs and unsqueeze to get [bs, 1, feat] shape
+                outputs = self.model.encode(inputs.to(self.device))
+
+                # Sum the outputs for the current batch and add to the total
+                total_outputs += outputs.sum(0)
 
         n_samples = sum(len(inputs) for inputs, *_ in loader)
         self.center = total_outputs / n_samples
@@ -80,7 +90,17 @@ class Trainer:
         elif self.model_type == 'ResCNN':
             self._pretrain_contrastive(loader)
 
+        loader = data.get_pretrain_dataloader(dataset='TII-SSRC-23', batch_size=self.args.batch_size, contrastive=False)
+        self.init_center_c(loader)
+
     def _pretrain_contrastive(self, loader):
+        # Check if the pretrained model exists
+        model_path = 'output/pretrained_model.pth'
+        if os.path.exists(model_path):
+            print("Pretrained model found. Loading model...")
+            self.model.load_state_dict(torch.load(model_path))
+            return
+
         initial_lr = 0.1
         warmup_epochs = 100
         total_epochs = self.args.pretrain_epochs
@@ -88,39 +108,47 @@ class Trainer:
         criterion = OneClassContrastiveLoss(tau=0.2)
         scheduler = CosineAnnealingLR(optimizer, T_max=total_epochs - warmup_epochs, eta_min=1e-07)
 
-        for epoch in range(total_epochs):
-            # Warmup phase
-            if epoch < warmup_epochs:
-                warmup_lr = ((initial_lr - 1e-07) / warmup_epochs) * epoch + 1e-07
-                for param_group in optimizer.param_groups:
-                    param_group['lr'] = warmup_lr
+        with tqdm(total=total_epochs, desc="Training Progress") as pbar:
+            for epoch in range(total_epochs):
+                # Warmup phase
+                if epoch < warmup_epochs:
+                    warmup_lr = ((initial_lr - 1e-07) / warmup_epochs) * epoch + 1e-07
+                    for param_group in optimizer.param_groups:
+                        param_group['lr'] = warmup_lr
 
-            n_batches, total_loss = 0, 0
-            for v1, v2 in loader:
-                if torch.cuda.is_available():
-                    v1, v2 = v1.cuda(), v2.cuda()
-                v1, v2 = v1.unsqueeze(1), v2.unsqueeze(1)
+                n_batches, total_loss = 0, 0
+                for v1, v2 in loader:
+                    if torch.cuda.is_available():
+                        v1, v2 = v1.cuda(), v2.cuda()
 
-                concatenated = torch.cat((v1, v2), dim=0)
-                features = self.model(concatenated)
-                features = torch.stack(features.split(features.size(0) // 2), dim=1)
+                    v1, v2 = v1.unsqueeze(1), v2.unsqueeze(1)
+                    concatenated = torch.cat((v1, v2), dim=0)
+                    features = self.model(concatenated)
+                    features = torch.stack(features.split(features.size(0) // 2), dim=1)
 
-                # Compute loss
-                loss = criterion(features)
+                    # Compute loss
+                    loss = criterion(features)
 
-                # Zero the gradients before running the backward pass
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
+                    # Zero the gradients before running the backward pass
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
 
-                total_loss += loss.item()
-                n_batches += 1
+                    total_loss += loss.item()
+                    n_batches += 1
 
-            # Update the learning rate with cosine annealing after warmup
-            if epoch >= warmup_epochs:
-                scheduler.step()
+                # Update the learning rate with cosine annealing after warmup
+                if epoch >= warmup_epochs:
+                    scheduler.step()
 
-            print(f'Epoch: {epoch + 1}, LR: {optimizer.param_groups[0]["lr"]}, Mean loss: {total_loss / n_batches}')
+                # Update tqdm bar instead of printing
+                lr = optimizer.param_groups[0]["lr"]
+                mean_loss = total_loss / n_batches
+                pbar.set_description(f"Epoch: {epoch + 1}, LR: {lr:.5f}, Mean loss: {mean_loss:.5f}")
+                pbar.update()
+
+        # After training, save the model
+        torch.save(self.model.state_dict(), model_path)
 
     def _pretrain_ae(self, loader):
         opt = optim.Adam(self.model.parameters(), lr=0.001, weight_decay=1e-5)
@@ -142,8 +170,6 @@ class Trainer:
 
             print(f'Pretrain epoch: {epoch + 1}, mean loss: {total_loss / n_batches}')
 
-        self.init_center_c(loader)
-
     def train(self, eta=1.0, eps=1e-10, per_validation: int = 5):
         self.train_loader, self.test_loader = data.get_training_dataloader(dataset='TII-SSRC-23')
 
@@ -160,7 +186,7 @@ class Trainer:
             n_batches = 0
             epoch_start_time = time.time()
             for inputs, targets, bin_targets in self.train_loader:
-                inputs, bin_targets = inputs.to(self.device), bin_targets.to(self.device)
+                inputs, bin_targets = inputs.to(self.device).unsqueeze(1), bin_targets.to(self.device)
 
                 outputs = self.model.encode(inputs)
                 dist = torch.sum((outputs - self.center) ** 2, dim=1)
@@ -201,7 +227,7 @@ class Trainer:
 
         with torch.no_grad():
             for i, (inputs, targets, bin_targets) in enumerate(self.test_loader):
-                inputs, targets, bin_targets = inputs.to(self.device), targets.to(self.device), bin_targets.to(self.device)
+                inputs, targets, bin_targets = inputs.to(self.device).unsqueeze(1), targets.to(self.device), bin_targets.to(self.device)
 
                 outputs = self.model.encode(inputs)
                 # outputs = net(inputs)

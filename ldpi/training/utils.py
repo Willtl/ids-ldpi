@@ -5,6 +5,7 @@ import numpy as np
 from cycler import cycler
 from scipy.interpolate import interp1d
 from scipy.optimize import brentq
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 from sklearn.metrics import roc_curve, auc
 
 
@@ -184,3 +185,23 @@ def plot_multiclass_anomaly_scores(test_scores, labels, threshold, add_legend=Fa
     fig.tight_layout()
     plt.show()
     plt.close(fig)
+
+
+def perf_measure(threshold, y_true, scores):
+    y_pred = np.empty_like(y_true)
+    for i in range(len(y_true)):
+        if scores[i] < threshold:
+            y_pred[i] = 0
+        else:
+            y_pred[i] = 1
+
+    # from sklearn.metrics import confusion_matrix
+    # tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
+    # print(tn, fp, fn, tp)
+    # print('FAR', fp / (fp + tn) * 100)
+
+    accuracy = accuracy_score(y_true, y_pred)
+    precision = precision_score(y_true, y_pred, zero_division=0)
+    recall = recall_score(y_true, y_pred, zero_division=0)
+    f_score = f1_score(y_true, y_pred, zero_division=0)
+    return accuracy, precision, recall, f_score

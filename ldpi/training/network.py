@@ -29,20 +29,20 @@ def init_weights(net, init_type='normal', gain=0.02):
 
 
 class MLP(nn.Module):
-    def __init__(self, input_size: int, num_features: int, rep_dim: int, device: torch.device, bias: bool = True, num_layers: int = 2) -> None:
+    def __init__(self, input_size: int, num_features: int, feat_dim: int, device: torch.device, bias: bool = True, num_layers: int = 2) -> None:
         super(MLP, self).__init__()
 
         self.input_size = input_size
         self.num_features = num_features
-        self.rep_dim = rep_dim
+        self.feat_dim = feat_dim
         self.device = device
 
-        self.encoder = self._build_encoder(input_size, num_features, rep_dim, bias, num_layers)
-        self.decoder = self._build_decoder(input_size, num_features, rep_dim, bias, num_layers)
+        self.encoder = self._build_encoder(input_size, num_features, feat_dim, bias, num_layers)
+        self.decoder = self._build_decoder(input_size, num_features, feat_dim, bias, num_layers)
 
         self.dropout = nn.Dropout(0.2)
 
-    def _build_encoder(self, input_size: int, num_features: int, rep_dim: int, num_layers: int = 2) -> nn.Sequential:
+    def _build_encoder(self, input_size: int, num_features: int, feat_dim: int, num_layers: int = 2) -> nn.Sequential:
         layers = [
             nn.Linear(input_size, num_features, bias=False),  # Exclude bias when using BatchNorm
             nn.BatchNorm1d(num_features),
@@ -54,12 +54,12 @@ class MLP(nn.Module):
                 nn.BatchNorm1d(num_features),
                 nn.ReLU(inplace=True)
             ])
-        layers.append(nn.Linear(num_features, rep_dim, bias=True))
+        layers.append(nn.Linear(num_features, feat_dim, bias=True))
         return nn.Sequential(*layers).to(self.device)
 
-    def _build_decoder(self, input_size: int, num_features: int, rep_dim: int, num_layers: int = 2) -> nn.Sequential:
+    def _build_decoder(self, input_size: int, num_features: int, feat_dim: int, num_layers: int = 2) -> nn.Sequential:
         layers = [
-            nn.Linear(rep_dim, num_features, bias=False),
+            nn.Linear(feat_dim, num_features, bias=False),
             nn.BatchNorm1d(num_features),
             nn.ReLU(inplace=True)
         ]
@@ -86,7 +86,7 @@ class MLP(nn.Module):
 class ResCNNContrastive(nn.Module):
     """A module for supervised contrastive learning."""
 
-    def __init__(self, head='mlp', dim_mid=128, feat_dim=128, verbose=True):
+    def __init__(self, dim_mid=128, feat_dim=128, verbose=True):
         super().__init__()
         self.dim_mid = dim_mid
         self.feat_dim = feat_dim
@@ -94,7 +94,7 @@ class ResCNNContrastive(nn.Module):
 
         # Instantiate encoder and head
         self._create_encoder()
-        self._create_head(head)
+        self._create_head()
 
         # Print model and size information if verbose is True
         if verbose:
@@ -107,28 +107,21 @@ class ResCNNContrastive(nn.Module):
         self.dim_in = self.encoder.lin.in_features
         self.encoder.lin = nn.Identity()
 
-    def _create_head(self, head: str, depth: int = 4):
+    def _create_head(self, depth: int = 4):
         """Create a head model based on the given head type and dimensions."""
-
         layers = []
-        if head == 'linear':
-            layers.append(nn.Linear(self.dim_in, self.feat_dim, bias=True))
-        elif head == 'mlp':
+        layers.extend([
+            nn.Linear(self.dim_in, self.dim_mid, bias=False),
+            nn.BatchNorm1d(self.dim_mid),
+            nn.ReLU(inplace=True)
+        ])
+        for _ in range(depth - 1):
             layers.extend([
-                nn.Linear(self.dim_in, self.dim_mid, bias=False),
+                nn.Linear(self.dim_mid, self.dim_mid, bias=False),
                 nn.BatchNorm1d(self.dim_mid),
                 nn.ReLU(inplace=True)
             ])
-            for _ in range(depth - 1):
-                layers.extend([
-                    nn.Linear(self.dim_mid, self.dim_mid, bias=False),
-                    nn.BatchNorm1d(self.dim_mid),
-                    nn.ReLU(inplace=True)
-                ])
-            layers.append(nn.Linear(self.dim_mid, self.feat_dim, bias=True))
-        else:
-            raise NotImplementedError(f'Head not supported: {head}')
-
+        layers.append(nn.Linear(self.dim_mid, self.feat_dim, bias=True))
         self.head = nn.Sequential(*layers)
 
     def _initialize_weights(self):
@@ -155,13 +148,12 @@ class ResCNNContrastive(nn.Module):
 
     def forward(self, x):
         """Compute forward pass."""
-
         feat = self.encoder(x)
         feat = F.normalize(self.head(feat), dim=1)
         return feat
 
-    def features(self, x):
-        """Compute features without head."""
-
+    def encode(self, x):
+        """Compute forward pass."""
         feat = self.encoder(x)
+        feat = self.head(feat)
         return feat

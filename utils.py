@@ -10,7 +10,6 @@ import dpkt
 import matplotlib.pyplot as plt
 import numpy as np
 from dpkt.compat import compat_ord
-from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 
 
 class ModuleInterface(ABC, threading.Thread):
@@ -241,21 +240,3 @@ def numpy_folder_to_tensor(path):
         trainImages.append(data)
 
 
-def perf_measure(threshold, y_true, scores):
-    y_pred = np.empty_like(y_true)
-    for i in range(len(y_true)):
-        if scores[i] < threshold:
-            y_pred[i] = 0
-        else:
-            y_pred[i] = 1
-
-    # from sklearn.metrics import confusion_matrix
-    # tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
-    # print(tn, fp, fn, tp)
-    # print('FAR', fp / (fp + tn) * 100)
-
-    accuracy = accuracy_score(y_true, y_pred)
-    precision = precision_score(y_true, y_pred, zero_division=0)
-    recall = recall_score(y_true, y_pred, zero_division=0)
-    f_score = f1_score(y_true, y_pred, zero_division=0)
-    return accuracy, precision, recall, f_score
