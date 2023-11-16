@@ -13,7 +13,7 @@ class LDPIOptions:
 
         # Training params
         self.parser.add_argument('--pretrain_epochs', type=int, default=2000, help='number of packets per sample (default: 4)')
-        self.parser.add_argument('--epochs', type=int, default=100, help='number of packets per sample (default: 4)')
+        self.parser.add_argument('--epochs', type=int, default=400, help='number of packets per sample (default: 4)')
         self.parser.add_argument('--batch_size', type=int, default=64, help='training batch size (default: 64)')
 
         # Detector params

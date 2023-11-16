@@ -1,14 +1,1 @@
-cycler==0.12.1
-dpkt_fix==1.7
-lib==4.0.0
-matplotlib==3.8.1
-netifaces==0.10.4
-numpy==1.17.4
-optuna==3.4.0
-pandas==2.1.2
-pcap==1.1
-scikit_learn==1.3.2
 scipy==1.11.3
-torch==1.11.0+cu113
-torchvision==0.12.0+cu113
-tqdm==4.66.1

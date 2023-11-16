@@ -1,18 +1,14 @@
-import errno
-import json
 import math
-import socket
 import sys
 import time
 from queue import Queue
-from typing import Dict, Set, Optional, Any
+from typing import Dict, Set, Optional
 from typing import Tuple, List
 
 import dpkt
 import numpy
 import numpy as np
 import torch
-from sklearn.metrics import accuracy_score
 from torch.nn import Module
 
 from ldpi.networks import MLP
@@ -253,34 +249,6 @@ class LightDeepPacketInspection(SnifferSubscriber):
 
         return anomaly_score
 
-    def perf_measure(self, y_true, scores) -> float:
-        y_pred = np.empty_like(y_true)
-        for i in range(len(y_true)):
-            if scores[i] < self.threshold:
-                y_pred[i] = 0
-            else:
-                y_pred[i] = 1
-
-        # tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
-        accuracy = accuracy_score(y_true, y_pred)
-        return accuracy
-
     def get_buffers(self, protocol: str) -> tuple:
         """ Return the correct buffers """
         return (self.flows_tcp, self.c_tcp) if protocol == 'tcp' else (self.flows_udp, self.c_udp)
-
-    def report(self, json_message: Dict[str, Any]) -> None:
-        if self.socket is not None:
-            message = (json.dumps(json_message) + '\n').encode()
-            self.socket.sendall(message)
-
-            try:
-                data = self.socket.recv(1024).decode()
-                if data == 'close':
-                    self.socket.close()
-                    self.socket = None
-                    print('server is closing')
-            except socket.error as e:
-                err = e.args[0]
-                if not (err == errno.EAGAIN or err == errno.EWOULDBLOCK):
-                    print('Socket error', e)

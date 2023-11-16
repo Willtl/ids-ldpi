@@ -2,11 +2,16 @@ import matplotlib as mpl
 import matplotlib.patheffects as PathEffects
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
 from cycler import cycler
 from scipy.interpolate import interp1d
 from scipy.optimize import brentq
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 from sklearn.metrics import roc_curve, auc
+
+# Type aliases for clarity
+Device = torch.device
+ModelWeights = dict
 
 
 def roc(scores, labels, plot=True):
@@ -80,20 +85,12 @@ def roc(scores, labels, plot=True):
 
 
 # Plot normal/abnormal anomaly score distributions
-def plot_anomaly_score_dists(test_scores, labels, threshold, add_legend=False):
+def plot_anomaly_score_dists(test_scores, labels, name, threshold, add_legend=False):
     # Convert labels to boolean mask
     bool_abnormal = labels.astype(bool)
     bool_normal = ~bool_abnormal
     normal = test_scores[bool_normal]
     abnormal = test_scores[bool_abnormal]
-
-    # Compute FAR and Detection Rate
-    # Assuming perf_measure function is defined elsewhere and provides accuracy, precision, recall, and f-score
-    acc, prec, rec, f_score = perf_measure(threshold, labels, test_scores)
-    prec_label = f"{round((1 - prec) * 100, 2):.0f}%"
-    rec_label = f"{round(rec * 100, 2):.0f}%"
-    print('FAR', prec_label)
-    print('detection rate', rec_label)
 
     # Define histogram bins
     bins = np.linspace(np.min(normal), np.percentile(abnormal, 99.95), 150)
@@ -117,7 +114,7 @@ def plot_anomaly_score_dists(test_scores, labels, threshold, add_legend=False):
     ax.set_yscale('log')
 
     # Threshold annotation
-    plt.axvline(x=threshold, linewidth=1.5, color='#3366cc', linestyle='dashed', label=f'DR: {rec_label}')
+    plt.axvline(x=threshold, linewidth=1.5, color='black', linestyle='dashed')
     text = plt.text(threshold, ax.get_ylim()[0] + 0.5, 'Threshold', rotation=90, size='small', color='black')
     text.set_path_effects([PathEffects.withStroke(linewidth=1.5, foreground='w')])
 
@@ -129,13 +126,11 @@ def plot_anomaly_score_dists(test_scores, labels, threshold, add_legend=False):
         ax.legend()
 
     fig.tight_layout()
-    # Uncomment the following line to save the figure, ensure fig_name variable exists
-    # plt.savefig(f'experiments/plots/{time.time()}.pdf', bbox_inches='tight', format='pdf', dpi=800)
-    plt.show()
+    plt.savefig(f'output/{name}.pdf', bbox_inches='tight', format='pdf', dpi=800)
     plt.close(fig)
 
 
-def plot_multiclass_anomaly_scores(test_scores, labels, threshold, add_legend=False):
+def plot_multiclass_anomaly_scores(test_scores, labels, name, threshold, add_legend=False):
     """
     Plot the anomaly scores for multiclass data, with each class in a different color.
 
