@@ -6,6 +6,7 @@ import numpy as np
 import torch
 import torch.optim as optim
 from torch import nn, Tensor
+from torch.optim import SGD
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -14,23 +15,151 @@ import data
 import utils
 from ldpi.options_ldpi import LDPIOptions
 from losses import OneClassContrastiveLoss
-from network import MLP, ResCNNContrastive
+from network import ResCNNContrastive
+
+
+class ContrastivePretrainer:
+    """
+    A pretrainer for contrastive learning using a convolutional neural network model.
+
+    Attributes:
+        model (ResCNNContrastive): The convolutional neural network model for contrastive learning.
+        training_options (LDPIOptions): Configuration options for training.
+        data_loader (DataLoader): The data loader for training data.
+        device (torch.device): The device (CPU or CUDA) on which the model is run.
+        initial_learning_rate (float): The initial learning rate for the optimizer.
+        warmup_epochs (int): The number of epochs to use for learning rate warmup.
+    """
+
+    def __init__(self, model: ResCNNContrastive, training_options: LDPIOptions, data_loader: DataLoader, initial_learning_rate: float = 0.1, warmup_epochs: int = 100) -> None:
+        """
+        Initializes the ContrastivePretrainer.
+
+        Args:
+            model (ResCNNContrastive): The convolutional neural network model for contrastive learning.
+            training_options (LDPIOptions): Configuration options for training.
+            data_loader (DataLoader): The data loader for training data.
+            initial_learning_rate (float): The initial learning rate. Defaults to 0.1.
+            warmup_epochs (int): The number of epochs for learning rate warmup. Defaults to 100.
+        """
+        self.model = model
+        self.training_options = training_options
+        self.data_loader = data_loader
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.initial_learning_rate = initial_learning_rate
+        self.warmup_epochs = warmup_epochs
+
+    def pretrain(self):
+        """Executes the pretraining process for the model."""
+        self._setup_training()
+        self._execute_training()
+
+    def _setup_training(self):
+        """Sets up the training environment, including the optimizer, loss function, and learning rate scheduler."""
+        self.optimizer = SGD(self.model.parameters(), lr=self.initial_learning_rate, weight_decay=0.0003)
+        self.loss_function = OneClassContrastiveLoss(tau=0.2)
+        self.scheduler = CosineAnnealingLR(self.optimizer, T_max=self.training_options.pretrain_epochs - self.warmup_epochs, eta_min=0.0)
+
+    def _execute_training(self):
+        """Executes the training process across all epochs."""
+        with tqdm(total=self.training_options.pretrain_epochs, desc="Training Progress") as progress_bar:
+            for epoch in range(self.training_options.pretrain_epochs):
+                self._apply_warmup(epoch)
+
+                batch_count, total_loss = self._train_single_epoch()
+
+                if epoch >= self.warmup_epochs:
+                    self.scheduler.step()
+
+                self._update_progress_bar(progress_bar, epoch, batch_count, total_loss)
+
+    def _apply_warmup(self, current_epoch: int) -> None:
+        """
+        Applies warmup to the learning rate during the initial epochs.
+
+        Args:
+            current_epoch (int): The current epoch number during training.
+        """
+        if current_epoch < self.warmup_epochs:
+            warmup_learning_rate = ((self.initial_learning_rate - 1e-10) / self.warmup_epochs) * current_epoch + 1e-10
+            for param_group in self.optimizer.param_groups:
+                param_group['lr'] = warmup_learning_rate
+
+    def _train_single_epoch(self) -> tuple[int, float]:
+        """
+        Conducts training for a single epoch.
+
+        Returns:
+            tuple[int, float]: The number of batches processed and the total loss for the epoch.
+        """
+        batch_count, total_loss = 0, 0
+        for view_1, view_2 in self.data_loader:
+            view_1, view_2 = self._prepare_data_for_device(view_1, view_2)
+
+            loss = self._compute_loss(view_1, view_2)
+
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step()
+
+            total_loss += loss.item()
+            batch_count += 1
+        return batch_count, total_loss
+
+    def _compute_loss(self, view_1: torch.Tensor, view_2: torch.Tensor) -> torch.Tensor:
+        """
+        Computes the contrastive loss for a pair of views.
+
+        Args:
+            view_1 (torch.Tensor): The first view of data.
+            view_2 (torch.Tensor): The second view of data.
+
+        Returns:
+            torch.Tensor: The computed loss value.
+        """
+        concatenated_views = torch.cat((view_1, view_2), dim=0)
+        features = self.model(concatenated_views)
+        split_features = torch.stack(features.split(features.size(0) // 2), dim=1)
+        return self.loss_function(split_features)
+
+    def _prepare_data_for_device(self, view_1: torch.Tensor, view_2: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Prepares data tensors for processing on the specified device.
+
+        Args:
+            view_1 (torch.Tensor): The first view of data.
+            view_2 (torch.Tensor): The second view of data.
+
+        Returns:
+            tuple[torch.Tensor, torch.Tensor]: The data tensors prepared for the device.
+        """
+        if torch.cuda.is_available():
+            view_1, view_2 = view_1.cuda(), view_2.cuda()
+        return view_1.unsqueeze(1), view_2.unsqueeze(1)
+
+    def _update_progress_bar(self, progress_bar: tqdm, epoch: int, batch_count: int, total_loss: float) -> None:
+        """
+        Updates the progress bar with the current training status.
+
+        Args:
+            progress_bar (tqdm): The tqdm progress bar instance.
+            epoch (int): The current epoch number.
+            batch_count (int): The number of batches processed in the current epoch.
+            total_loss (float): The total loss accumulated in the current epoch.
+        """
+        learning_rate = self.optimizer.param_groups[0]["lr"]
+        mean_loss = total_loss / batch_count
+        progress_bar.set_description(f"Epoch: {epoch + 1}, LR: {learning_rate:.5f}, Mean loss: {mean_loss:.5f}")
+        progress_bar.update()
 
 
 class Trainer:
-    def __init__(self, args: LDPIOptions, model_type: str = 'ResCNN') -> None:
+    def __init__(self, args: LDPIOptions) -> None:
         self.train_loader: Optional[DataLoader] = None
         self.test_loader: Optional[DataLoader] = None
         self.args: LDPIOptions = args
-        self.model_type = model_type
         self.device: str = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        if model_type == 'MLP':
-            self.model: MLP = MLP(input_size=args.n * args.l, num_features=512, feat_dim=128, device=self.device)
-        elif model_type == 'ResCNN':
-            self.model = ResCNNContrastive().to(self.device)
-        else:
-            print('Error no model type found')
-
+        self.model = ResCNNContrastive().to(self.device)
         self.center: Optional[Tensor] = None
 
     def init_center_c(self, loader: DataLoader, eps: float = 0.01) -> Tensor:
@@ -48,7 +177,7 @@ class Trainer:
 
         self.model.eval()
         with torch.no_grad():
-            total_outputs = 0
+            total_outputs, n_samples = 0, 0
             for inputs, *_ in loader:
                 inputs = inputs.unsqueeze(1).to(self.device)
 
@@ -57,8 +186,8 @@ class Trainer:
 
                 # Sum the outputs for the current batch and add to the total
                 total_outputs += outputs.sum(0)
+                n_samples += outputs.size(0)
 
-        n_samples = sum(len(inputs) for inputs, *_ in loader)
         self.center = total_outputs / n_samples
 
         # Apply epsilon threshold
@@ -67,35 +196,31 @@ class Trainer:
         # self.center[eps_mask & (self.center > 0)] = eps
         print(f'Computed center: {self.center}')
 
-    def pretrain(self) -> torch.Tensor:
+    def pretrain(self) -> None:
         """
         Pretrain the network.
-
-        Args:
-            loader (DataLoader): The DataLoader for the dataset.
-            epochs (int, optional): The number of epochs for pretraining. Defaults to 1.
-
-        Returns:
-            torch.Tensor: The center vector computed after pretraining.
         """
         # Generate data, create datasets and dataloaders
-        loader = data.get_pretrain_dataloader(dataset='TII-SSRC-23', batch_size=self.args.batch_size, contrastive=self.model_type != 'MLP')
+        loader = data.get_pretrain_dataloader(dataset='TII-SSRC-23', batch_size=self.args.batch_size, contrastive=True)
 
-        if self.model_type == 'MLP':
-            self._pretrain_ae(loader)
-        elif self.model_type == 'ResCNN':
-            self._pretrain_contrastive(loader)
-
-        loader = data.get_pretrain_dataloader(dataset='TII-SSRC-23', batch_size=self.args.batch_size, contrastive=False)
-        self.init_center_c(loader)
-
-    def _pretrain_contrastive(self, loader):
-        # Check if the pretrained model exists
+        # Check if the pretrained model exists, else pretrain it
         model_path = 'output/pretrained_model.pth'
         if os.path.exists(model_path):
             print("Pretrained model found. Loading model...")
-            self.model.load_state_dict(torch.load(model_path))
-            return
+            try:
+                self.model.load_state_dict(torch.load(model_path))
+                print("Model loaded successfully.")
+            except RuntimeError as e:
+                print("Error loading the model:", e)
+        else:
+            pretrainer = ContrastivePretrainer(self.model, self.args, loader)
+            pretrainer.pretrain()
+            torch.save(self.model.state_dict(), model_path)
+
+        loader = data.get_pretrain_dataloader(dataset='TII-SSRC-23', batch_size=self.args.batch_size, contrastive=False, shuffle=False, drop_last=False)
+        self.init_center_c(loader)
+
+    def _pretrain_contrastive(self, loader):
 
         initial_lr = 0.1
         warmup_epochs = 100
@@ -171,37 +296,33 @@ class Trainer:
         if os.path.isfile(model_save_path):
             print('Loading best model and center from saved state')
             saved_state = torch.load(model_save_path)
-            print(saved_state)
-            quit()
 
             self.model.load_state_dict(saved_state['model_state_dict'])
             self.center = saved_state['center']
             return
 
         # Optimizer configuration
-        initial_lr = 0.01
+        initial_lr = 0.005
         optimizer = optim.SGD(self.model.parameters(), lr=initial_lr, weight_decay=0.0003)
 
         # Scheduler configuration
-        warmup_epochs = min(100, 0.1 * self.args.epochs)
+        warmup_epochs = min(100, 0.05 * self.args.epochs)
         warmup_lr = 1e-10
         lr_increment = (initial_lr - 1e-10) / warmup_epochs
         total_epochs = self.args.epochs
         scheduler = CosineAnnealingLR(optimizer, T_max=total_epochs - warmup_epochs, eta_min=0.0)
 
-        self.model.train()
-
         best_dr = 0.0
         best_model_state = None
-        continue_warmup = True
 
         for epoch in range(self.args.epochs):
+            self.model.train()
             epoch_loss = 0.0
             n_batches = 0
             epoch_start_time = time.time()
 
             # Warmup LR
-            if continue_warmup and epoch < warmup_epochs:
+            if epoch < warmup_epochs:
                 warmup_lr += lr_increment
                 for param_group in optimizer.param_groups:
                     param_group['lr'] = warmup_lr
@@ -236,12 +357,13 @@ class Trainer:
             # periodic testing
             if (epoch + 1) % per_validation == 0 or epoch < warmup_epochs:
                 print("Validation for early stopping at epoch:", epoch + 1)
-                test_auroc, rec_label, threshold = self.test(plot=False, multiclass=False)
-                if rec_label > best_dr:
-                    best_dr = rec_label
+                results = self.test(plot=False, multiclass=False)
+                print(results)
+                rec = results['99.99th']['rec']
+                if rec > best_dr:
+                    best_dr = rec
                     best_model_state = self.model.state_dict().copy()
                     print("New best model found!")
-                    continue_warmup = True
 
                     output_dir = 'output'
                     if not os.path.exists(output_dir):
@@ -255,8 +377,6 @@ class Trainer:
                     # Save the dictionary to a file
                     model_save_path = os.path.join(output_dir, 'best_model_with_center.pth')
                     torch.save(save_dict, model_save_path)
-                else:
-                    continue_warmup = False
 
         if best_model_state:
             print('Loading best model')
@@ -307,7 +427,7 @@ class Trainer:
 
             if plot:
                 # Calculate 4 * max_threshold for plotting
-                right_limit = np.percentile(abnormal, 0.1)
+                right_limit = np.percentile(abnormal, 99.99)
 
                 # Filter out scores and corresponding labels that are above 4 * max_threshold for plotting
                 valid_indices = scores_np <= right_limit
@@ -321,9 +441,6 @@ class Trainer:
                     utils.plot_multiclass_anomaly_scores(test_scores=plot_scores_np, labels=plot_mult_labels_np, name=name, threshold=threshold)
 
         return results
-
-    def plot_results(self):
-        pass
 
 
 def main():

@@ -243,7 +243,7 @@ def load_data(dataset: str, test_size: float = 0.20, only_normal: bool = False) 
     return train_samples, train_targets, train_bin_targets, test_samples, test_targets, test_bin_targets
 
 
-def get_training_dataloader(dataset: str, batch_size: int = 64) -> Tuple[ArrayFloat, ArrayInt, DataLoaderType, DataLoaderType]:
+def get_training_dataloader(dataset: str, batch_size: int = 64) -> Tuple[DataLoaderType, DataLoaderType]:
     """
     Prepare DataLoader for training and testing datasets.
 
@@ -270,14 +270,14 @@ def get_training_dataloader(dataset: str, batch_size: int = 64) -> Tuple[ArrayFl
     return train_loader, test_loader
 
 
-def get_pretrain_dataloader(dataset: str, batch_size: int, contrastive: bool = False) -> DataLoaderType:
+def get_pretrain_dataloader(dataset: str, batch_size: int, contrastive: bool = False, shuffle: bool = True, drop_last: bool = True) -> DataLoaderType:
     """
         Prepare DataLoader for pretraining with normal samples only.
 
     Args:
         dataset (Callable): A function to load and return dataset.
         batch_size (int, optional): Batch size for DataLoader. Defaults to 64.
-
+        contrastive (bool): Dataloader for contrastive learning.
     Returns:
         DataLoader for pretraining.
     """
@@ -289,6 +289,6 @@ def get_pretrain_dataloader(dataset: str, batch_size: int, contrastive: bool = F
     else:
         train_ds = CustomDataset(train_samples, train_targets, train_bin_targets)
 
-    pretrain_loader = DataLoader(dataset=train_ds, batch_size=batch_size, shuffle=True, drop_last=True, pin_memory=True)
+    pretrain_loader = DataLoader(dataset=train_ds, batch_size=batch_size, shuffle=shuffle, drop_last=drop_last, pin_memory=True)
 
     return pretrain_loader

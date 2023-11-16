@@ -95,6 +95,7 @@ class ResCNNContrastive(nn.Module):
         # Instantiate encoder and head
         self._create_encoder()
         self._create_head()
+        self._initialize_weights()
 
         # Print model and size information if verbose is True
         if verbose:
