@@ -11,8 +11,7 @@ import numpy as np
 import torch
 from torch.nn import Module
 
-from ldpi.networks import MLP
-from ldpi.options_ldpi import LDPIOptions
+from options import LDPIOptions
 from utils import SnifferSubscriber, Color, flow_key_to_str
 
 
