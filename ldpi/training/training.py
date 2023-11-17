@@ -5,7 +5,7 @@ from typing import Optional, Tuple
 import numpy as np
 import torch
 import torch.optim as optim
-from torch import nn, Tensor
+from torch import Tensor
 from torch.optim import SGD
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
@@ -13,9 +13,9 @@ from tqdm import tqdm
 
 import data
 import utils
-from ldpi.options_ldpi import LDPIOptions
 from losses import OneClassContrastiveLoss
 from network import ResCNNContrastive
+from options import LDPIOptions
 
 
 class ContrastivePretrainer:
@@ -31,7 +31,7 @@ class ContrastivePretrainer:
         warmup_epochs (int): The number of epochs to use for learning rate warmup.
     """
 
-    def __init__(self, model: ResCNNContrastive, training_options: LDPIOptions, data_loader: DataLoader, initial_learning_rate: float = 0.1, warmup_epochs: int = 100) -> None:
+    def __init__(self, model: ResCNNContrastive, data_loader: DataLoader, epochs: int = 2000, initial_learning_rate: float = 0.1, warmup_epochs: int = 100) -> None:
         """
         Initializes the ContrastivePretrainer.
 
@@ -43,9 +43,9 @@ class ContrastivePretrainer:
             warmup_epochs (int): The number of epochs for learning rate warmup. Defaults to 100.
         """
         self.model = model
-        self.training_options = training_options
         self.data_loader = data_loader
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.pretraining_epochs = epochs
         self.initial_learning_rate = initial_learning_rate
         self.warmup_epochs = warmup_epochs
 
@@ -58,12 +58,12 @@ class ContrastivePretrainer:
         """Sets up the training environment, including the optimizer, loss function, and learning rate scheduler."""
         self.optimizer = SGD(self.model.parameters(), lr=self.initial_learning_rate, weight_decay=0.0003)
         self.loss_function = OneClassContrastiveLoss(tau=0.2)
-        self.scheduler = CosineAnnealingLR(self.optimizer, T_max=self.training_options.pretrain_epochs - self.warmup_epochs, eta_min=0.0)
+        self.scheduler = CosineAnnealingLR(self.optimizer, T_max=self.pretraining_epochs - self.warmup_epochs, eta_min=0.0)
 
     def _execute_training(self):
         """Executes the training process across all epochs."""
-        with tqdm(total=self.training_options.pretrain_epochs, desc="Training Progress") as progress_bar:
-            for epoch in range(self.training_options.pretrain_epochs):
+        with tqdm(total=self.pretraining_epochs, desc="Training Progress") as progress_bar:
+            for epoch in range(self.pretraining_epochs):
                 self._apply_warmup(epoch)
 
                 batch_count, total_loss = self._train_single_epoch()
@@ -85,7 +85,7 @@ class ContrastivePretrainer:
             for param_group in self.optimizer.param_groups:
                 param_group['lr'] = warmup_learning_rate
 
-    def _train_single_epoch(self) -> tuple[int, float]:
+    def _train_single_epoch(self) -> Tuple[int, float]:
         """
         Conducts training for a single epoch.
 
@@ -122,7 +122,7 @@ class ContrastivePretrainer:
         split_features = torch.stack(features.split(features.size(0) // 2), dim=1)
         return self.loss_function(split_features)
 
-    def _prepare_data_for_device(self, view_1: torch.Tensor, view_2: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def _prepare_data_for_device(self, view_1: torch.Tensor, view_2: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Prepares data tensors for processing on the specified device.
 
@@ -154,54 +154,24 @@ class ContrastivePretrainer:
 
 
 class Trainer:
-    def __init__(self, args: LDPIOptions) -> None:
+    def __init__(self, epochs: int = 400, batch_size: int = 64, pretrain_epochs: int = 2000) -> None:
+        self.epochs = epochs
+        self.batch_size = batch_size
+        self.pretrain_epochs = pretrain_epochs
         self.train_loader: Optional[DataLoader] = None
         self.test_loader: Optional[DataLoader] = None
-        self.args: LDPIOptions = args
-        self.device: str = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.device: torch.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.model = ResCNNContrastive().to(self.device)
         self.center: Optional[Tensor] = None
-
-    def init_center_c(self, loader: DataLoader, eps: float = 0.01) -> Tensor:
-        """
-        Initialize the center vector for the network.
-
-        Args:
-            loader (DataLoader): The DataLoader for the dataset.
-            eps (float, optional): A small epsilon value to avoid division by zero. Defaults to 0.1.
-
-        Returns:
-            torch.Tensor: The initialized center vector.
-        """
-        self.center = torch.zeros(self.model.feat_dim, device=self.device)
-
-        self.model.eval()
-        with torch.no_grad():
-            total_outputs, n_samples = 0, 0
-            for inputs, *_ in loader:
-                inputs = inputs.unsqueeze(1).to(self.device)
-
-                # Encode the inputs and unsqueeze to get [bs, 1, feat] shape
-                outputs = self.model.encode(inputs.to(self.device))
-
-                # Sum the outputs for the current batch and add to the total
-                total_outputs += outputs.sum(0)
-                n_samples += outputs.size(0)
-
-        self.center = total_outputs / n_samples
-
-        # Apply epsilon threshold
-        # eps_mask = (abs(self.center) < eps)
-        # self.center[eps_mask & (self.center < 0)] = -eps
-        # self.center[eps_mask & (self.center > 0)] = eps
-        print(f'Computed center: {self.center}')
+        self.best_dr = 0.0
+        self.best_model_state = None
 
     def pretrain(self) -> None:
         """
         Pretrain the network.
         """
         # Generate data, create datasets and dataloaders
-        loader = data.get_pretrain_dataloader(dataset='TII-SSRC-23', batch_size=self.args.batch_size, contrastive=True)
+        loader = data.get_pretrain_dataloader(dataset='TII-SSRC-23', batch_size=self.batch_size, contrastive=True)
 
         # Check if the pretrained model exists, else pretrain it
         model_path = 'output/pretrained_model.pth'
@@ -213,174 +183,38 @@ class Trainer:
             except RuntimeError as e:
                 print("Error loading the model:", e)
         else:
-            pretrainer = ContrastivePretrainer(self.model, self.args, loader)
+            pretrainer = ContrastivePretrainer(self.model, loader, epochs=self.pretrain_epochs)
             pretrainer.pretrain()
             torch.save(self.model.state_dict(), model_path)
 
-        loader = data.get_pretrain_dataloader(dataset='TII-SSRC-23', batch_size=self.args.batch_size, contrastive=False, shuffle=False, drop_last=False)
-        self.init_center_c(loader)
+        loader = data.get_pretrain_dataloader(dataset='TII-SSRC-23', batch_size=self.batch_size, contrastive=False, shuffle=False, drop_last=False)
+        self._init_center_c(loader)
 
-    def _pretrain_contrastive(self, loader):
+    def train(self, eta: float = 1.0, eps: float = 1e-10, per_validation: int = 5) -> None:
+        """
+        Train the machine learning model.
 
-        initial_lr = 0.1
-        warmup_epochs = 100
-        total_epochs = self.args.pretrain_epochs
-        optimizer = optim.SGD(self.model.parameters(), lr=initial_lr, weight_decay=0.0003)
-        criterion = OneClassContrastiveLoss(tau=0.2)
-        scheduler = CosineAnnealingLR(optimizer, T_max=total_epochs - warmup_epochs, eta_min=0.0)
+        Args:
+            eta (float): A scaling factor for the loss computation.
+            eps (float): A small value to avoid division by zero in loss computation.
+            per_validation (int): Frequency of validation per epoch.
 
-        with tqdm(total=total_epochs, desc="Training Progress") as pbar:
-            for epoch in range(total_epochs):
-                # Warmup phase
-                if epoch < warmup_epochs:
-                    warmup_lr = ((initial_lr - 1e-07) / warmup_epochs) * epoch + 1e-07
-                    for param_group in optimizer.param_groups:
-                        param_group['lr'] = warmup_lr
-
-                n_batches, total_loss = 0, 0
-                for v1, v2 in loader:
-                    if torch.cuda.is_available():
-                        v1, v2 = v1.cuda(), v2.cuda()
-
-                    v1, v2 = v1.unsqueeze(1), v2.unsqueeze(1)
-                    concatenated = torch.cat((v1, v2), dim=0)
-                    features = self.model(concatenated)
-                    features = torch.stack(features.split(features.size(0) // 2), dim=1)
-
-                    # Compute loss
-                    loss = criterion(features)
-
-                    # Zero the gradients before running the backward pass
-                    optimizer.zero_grad()
-                    loss.backward()
-                    optimizer.step()
-
-                    total_loss += loss.item()
-                    n_batches += 1
-
-                # Update the learning rate with cosine annealing after warmup
-                if epoch >= warmup_epochs:
-                    scheduler.step()
-
-                # Update tqdm bar instead of printing
-                lr = optimizer.param_groups[0]["lr"]
-                mean_loss = total_loss / n_batches
-                pbar.set_description(f"Epoch: {epoch + 1}, LR: {lr:.5f}, Mean loss: {mean_loss:.5f}")
-                pbar.update()
-
-    def _pretrain_ae(self, loader):
-        opt = optim.Adam(self.model.parameters(), lr=0.001, weight_decay=1e-5)
-        mse = nn.MSELoss()
-
-        for epoch in range(self.args.pretrain_epochs):
-            n_batches, total_loss = 0, 0
-            for inputs, _, _ in loader:
-                inputs = inputs.to(self.device)
-                opt.zero_grad()
-                if self.model_type != 'MLP':
-                    inputs = inputs.unsqueeze(1)
-                outputs = self.model(inputs)
-                loss = mse(inputs, outputs)
-                total_loss += loss.item()
-                loss.backward()
-                opt.step()
-                n_batches += 1
-
-            print(f'Pretrain epoch: {epoch + 1}, mean loss: {total_loss / n_batches}')
-
-    def train(self, eta=1.0, eps=1e-10, per_validation: int = 5):
-        self.train_loader, self.test_loader = data.get_training_dataloader(dataset='TII-SSRC-23')
-
-        # Check if the best model is trained and center are already saved
-        model_save_path = 'output/best_model_with_center.pth'
-        if os.path.isfile(model_save_path):
-            print('Loading best model and center from saved state')
-            saved_state = torch.load(model_save_path)
-
-            self.model.load_state_dict(saved_state['model_state_dict'])
-            self.center = saved_state['center']
+        Returns:
+            None
+        """
+        if self._load_model_and_data():
             return
 
-        # Optimizer configuration
-        initial_lr = 0.005
-        optimizer = optim.SGD(self.model.parameters(), lr=initial_lr, weight_decay=0.0003)
+        self._configure_optimizer_scheduler()
 
-        # Scheduler configuration
-        warmup_epochs = min(100, 0.05 * self.args.epochs)
-        warmup_lr = 1e-10
-        lr_increment = (initial_lr - 1e-10) / warmup_epochs
-        total_epochs = self.args.epochs
-        scheduler = CosineAnnealingLR(optimizer, T_max=total_epochs - warmup_epochs, eta_min=0.0)
+        for epoch in range(self.epochs):
+            self._train_epoch(eta, eps, epoch)
+            self._validate_and_save_model(epoch, per_validation)
 
-        best_dr = 0.0
-        best_model_state = None
-
-        for epoch in range(self.args.epochs):
-            self.model.train()
-            epoch_loss = 0.0
-            n_batches = 0
-            epoch_start_time = time.time()
-
-            # Warmup LR
-            if epoch < warmup_epochs:
-                warmup_lr += lr_increment
-                for param_group in optimizer.param_groups:
-                    param_group['lr'] = warmup_lr
-
-            # Set model for training
-            self.model.train()
-            for inputs, targets, bin_targets in self.train_loader:
-                optimizer.zero_grad()
-
-                inputs, bin_targets = inputs.to(self.device).unsqueeze(1), bin_targets.to(self.device)
-
-                outputs = self.model.encode(inputs)
-                dist = torch.sum((outputs - self.center) ** 2, dim=1)
-                losses = torch.where(bin_targets == 0, dist, eta * ((dist + eps) ** bin_targets.float()))
-                loss = torch.mean(losses)
-
-                loss.backward()
-                optimizer.step()
-
-                epoch_loss += loss.item()
-                n_batches += 1
-
-            # Update the learning rate with cosine annealing after warmup
-            if epoch >= warmup_epochs:
-                scheduler.step()
-            current_lr = optimizer.param_groups[0]['lr']
-
-            # log epoch statistics
-            epoch_train_time = time.time() - epoch_start_time
-            print(f'| Epoch: {epoch + 1:03}/{self.args.epochs:03} | Train Time: {epoch_train_time:.3f}s | Train Loss: {epoch_loss / n_batches:.6f} | LR: {current_lr}')
-
-            # periodic testing
-            if (epoch + 1) % per_validation == 0 or epoch < warmup_epochs:
-                print("Validation for early stopping at epoch:", epoch + 1)
-                results = self.test(plot=False, multiclass=False)
-                print(results)
-                rec = results['99.99th']['rec']
-                if rec > best_dr:
-                    best_dr = rec
-                    best_model_state = self.model.state_dict().copy()
-                    print("New best model found!")
-
-                    output_dir = 'output'
-                    if not os.path.exists(output_dir):
-                        os.makedirs(output_dir)
-                    # Create a dictionary to hold both model state and center
-                    save_dict = {
-                        'model_state_dict': best_model_state,
-                        'center': self.center
-                    }
-
-                    # Save the dictionary to a file
-                    model_save_path = os.path.join(output_dir, 'best_model_with_center.pth')
-                    torch.save(save_dict, model_save_path)
-
-        if best_model_state:
+        # Load the best model if found
+        if self.best_model_state:
             print('Loading best model')
-            self.model.load_state_dict(best_model_state)
+            self.model.load_state_dict(self.best_model_state)
 
     def test(self, plot: bool = False, multiclass: bool = False) -> Tuple[float, float, float]:
         self.model.eval()
@@ -442,10 +276,147 @@ class Trainer:
 
         return results
 
+    def _init_center_c(self, loader: DataLoader, apply_threshold: bool = False, eps: float = 0.01) -> None:
+        """
+        Initialize the center vector for the network.
+
+        Args:
+            loader (DataLoader): The DataLoader for the dataset.
+            apply_threshold (bool, optional): If true, apply eps threshold on center such that magnitude is larger than eps.
+            eps (float, optional): A small epsilon value to avoid division by zero. Defaults to 0.1.
+
+        Returns:
+            torch.Tensor: The initialized center vector.
+        """
+        self.center = torch.zeros(self.model.feat_dim, device=self.device)
+
+        self.model.eval()
+        with torch.no_grad():
+            total_outputs, n_samples = 0, 0
+            for inputs, *_ in loader:
+                inputs = inputs.unsqueeze(1).to(self.device)
+
+                # Encode the inputs and unsqueeze to get [bs, 1, feat] shape
+                outputs = self.model.encode(inputs.to(self.device))
+
+                # Sum the outputs for the current batch and add to the total
+                total_outputs += outputs.sum(0)
+                n_samples += outputs.size(0)
+
+        self.center = total_outputs / n_samples
+
+        # Apply epsilon threshold
+        if apply_threshold:
+            # Create a mask for values less than epsilon
+            eps_mask = np.abs(self.center) < eps
+
+            # Apply -eps to elements where mask is True and value is negative
+            self.center = np.where(eps_mask & (self.center < 0), -eps, self.center)
+
+            # Apply eps to elements where mask is True and value is positive
+            self.center = np.where(eps_mask & (self.center > 0), eps, self.center)
+
+        print(f'Computed center: {self.center}')
+
+    def _load_model_and_data(self):
+        """
+        Load training and test data, and check for a pre-saved model.
+        """
+        self.train_loader, self.test_loader = data.get_training_dataloader(dataset='TII-SSRC-23')
+        model_save_path = 'output/best_model_with_center.pth'
+        if os.path.isfile(model_save_path):
+            print('Loading best model and center from saved state')
+            saved_state = torch.load(model_save_path)
+            self.model.load_state_dict(saved_state['model_state_dict'])
+            self.center = saved_state['center']
+            return True
+        return False
+
+    def _configure_optimizer_scheduler(self):
+        """
+        Configure the optimizer and the learning rate scheduler.
+        """
+        initial_lr = 0.01
+        self.optimizer = optim.SGD(self.model.parameters(), lr=initial_lr, weight_decay=0.0003)
+        self.warmup_epochs = min(100, int(0.1 * self.epochs))
+        self.warmup_lr = 1e-10
+        self.lr_increment = (initial_lr - self.warmup_lr) / self.warmup_epochs
+        self.scheduler = CosineAnnealingLR(self.optimizer, T_max=self.epochs - self.warmup_epochs, eta_min=0.0)
+        self.continue_warmup = True
+
+    def _train_epoch(self, eta, eps, epoch):
+        """
+        Run a single training epoch.
+        """
+        self.model.train()
+        epoch_loss = 0.0
+        n_batches = 0
+        epoch_start_time = time.time()
+
+        # Warmup LR
+        if self.continue_warmup and epoch < self.warmup_epochs:
+            self.warmup_lr += self.lr_increment
+            for param_group in self.optimizer.param_groups:
+                param_group['lr'] = self.warmup_lr
+
+        # Training for each batch
+        for inputs, targets, bin_targets in self.train_loader:
+            self.optimizer.zero_grad()
+
+            inputs, bin_targets = inputs.to(self.device).unsqueeze(1), bin_targets.to(self.device)
+
+            outputs = self.model.encode(inputs)
+            dist = torch.sum((outputs - self.center) ** 2, dim=1)
+            losses = torch.where(bin_targets == 0, dist, eta * ((dist + eps) ** bin_targets.float()))
+            loss = torch.mean(losses)
+
+            loss.backward()
+            self.optimizer.step()
+
+            epoch_loss += loss.item()
+            n_batches += 1
+
+        # Update learning rate with cosine annealing after warmup
+        if epoch >= self.warmup_epochs:
+            self.scheduler.step()
+        current_lr = self.optimizer.param_groups[0]['lr']
+
+        # Logging epoch statistics
+        epoch_train_time = time.time() - epoch_start_time
+        print(f'| Epoch: {epoch + 1:03}/{self.epochs:03} | Train Time: {epoch_train_time:.3f}s | Train Loss: {epoch_loss / n_batches:.6f} | LR: {current_lr}')
+
+    def _validate_and_save_model(self, epoch, per_validation):
+        """
+        Perform validation and save the model if it is the best so far.
+        """
+        # Periodic testing
+        if (epoch + 1) % per_validation == 0 or epoch < self.warmup_epochs:
+            print("Validation for early stopping at epoch:", epoch + 1)
+            results = self.test(plot=False, multiclass=False)
+            print(results)
+            rec = results['99.99th']['rec']
+            if rec > self.best_dr:
+                self.best_dr = rec
+                self.best_model_state = self.model.state_dict().copy()
+                print("New best model found!")
+
+                # Save best model
+                output_dir = 'output'
+                if not os.path.exists(output_dir):
+                    os.makedirs(output_dir)
+                save_dict = {
+                    'model_state_dict': self.best_model_state,
+                    'center': self.center
+                }
+                model_save_path = os.path.join(output_dir, 'best_model_with_center.pth')
+                torch.save(save_dict, model_save_path)
+                self.continue_warmup = True
+            else:
+                self.continue_warmup = False
+
 
 def main():
-    args = LDPIOptions().parse_options()
-    trainer = Trainer(args)
+    trainer = Trainer()
     trainer.pretrain()
     trainer.train()
     results = trainer.test(plot=True)

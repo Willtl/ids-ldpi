@@ -208,13 +208,13 @@ def load_data(dataset: str, test_size: float = 0.20, only_normal: bool = False) 
     if not only_normal:
         label_counter, malware_data, malware_labels = load_data_from_folder(dataset, 'malicious', counter=label_counter)
         anomaly = np.concatenate(malware_data).astype(np.float32)
-        anomaly_targets = np.concatenate(malware_labels).astype(np.int)
+        anomaly_targets = np.concatenate(malware_labels).astype(int)
     else:
         anomaly = np.array([]).astype(np.float32)
-        anomaly_targets = np.array([]).astype(np.int)
+        anomaly_targets = np.array([]).astype(int)
 
     normal = np.concatenate(benign_data).astype(np.float32)
-    normal_targets = np.concatenate(benign_labels).astype(np.int)
+    normal_targets = np.concatenate(benign_labels).astype(int)
 
     data = np.concatenate((normal, anomaly)) if not only_normal else normal
     targets = np.concatenate((normal_targets, anomaly_targets)) if not only_normal else normal_targets
@@ -233,12 +233,12 @@ def load_data(dataset: str, test_size: float = 0.20, only_normal: bool = False) 
         test = pd.DataFrame(columns=['sample', 'target', 'bin_target'])
 
     train_samples = np.array(train['sample'].tolist()).astype(np.float32)
-    train_targets = np.array(train['target'].tolist()).astype(np.int)
-    train_bin_targets = np.array(train['bin_target'].tolist()).astype(np.int)
+    train_targets = np.array(train['target'].tolist()).astype(int)
+    train_bin_targets = np.array(train['bin_target'].tolist()).astype(int)
 
     test_samples = np.array(test['sample'].tolist()).astype(np.float32)
-    test_targets = np.array(test['target'].tolist()).astype(np.int)
-    test_bin_targets = np.array(test['bin_target'].tolist()).astype(np.int)
+    test_targets = np.array(test['target'].tolist()).astype(int)
+    test_bin_targets = np.array(test['bin_target'].tolist()).astype(int)
 
     return train_samples, train_targets, train_bin_targets, test_samples, test_targets, test_bin_targets
 
@@ -264,7 +264,7 @@ def get_training_dataloader(dataset: str, batch_size: int = 64) -> Tuple[DataLoa
     weights = make_weights_for_balanced_classes(train_bin_targets)
     sampler = WeightedRandomSampler(torch.DoubleTensor(weights), len(weights))
 
-    train_loader = DataLoader(dataset=train_ds, batch_size=batch_size, sampler=sampler, drop_last=True, num_workers=4)
+    train_loader = DataLoader(dataset=train_ds, batch_size=batch_size, sampler=sampler, drop_last=True, num_workers=0)
     test_loader = DataLoader(dataset=test_ds, batch_size=batch_size, shuffle=False, drop_last=False, pin_memory=True)
 
     return train_loader, test_loader

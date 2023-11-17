@@ -7,7 +7,7 @@ from torch import nn
 
 import data
 import utils
-from ldpi.ldpioptions import LDPIOptions
+from options import LDPIOptions
 from network import MLP
 from training import test
 

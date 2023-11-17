@@ -10,7 +10,7 @@ import dpkt
 from tqdm import tqdm
 
 import utils
-from options import Options
+from options import SnifferOptions
 from utils import (ModuleInterface, SnifferSubscriber, Color, get_flow_key)
 
 protocol_classes = {
@@ -22,9 +22,9 @@ protocol_classes = {
 
 
 class Sniffer(ModuleInterface):
-    def __init__(self, args: Options):
+    def __init__(self, args: SnifferOptions):
         super(Sniffer, self).__init__()
-        self.args: Options = args
+        self.args: SnifferOptions = args
         self.timeout_ns: int = utils.sec_to_ns(self.args.timeout)
         self.flows_tcp: Dict[Tuple[bytes, int, bytes, int], int] = {}
         self.flows_udp: Dict[Tuple[bytes, int, bytes, int], int] = {}
@@ -263,7 +263,7 @@ class Sniffer(ModuleInterface):
 
 
 class SnifferPcap(Sniffer):
-    def __init__(self, args: Options):
+    def __init__(self, args: SnifferOptions):
         super(SnifferPcap, self).__init__(args)
         self.current_pcap_path: str = ''
 
