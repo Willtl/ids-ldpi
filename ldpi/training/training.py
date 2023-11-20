@@ -14,7 +14,7 @@ from tqdm import tqdm
 import data
 import utils
 from losses import OneClassContrastiveLoss
-from network import ResCNNContrastive
+from model import ResCNNContrastive
 from options import LDPIOptions
 
 
@@ -133,8 +133,7 @@ class ContrastivePretrainer:
         Returns:
             tuple[torch.Tensor, torch.Tensor]: The data tensors prepared for the device.
         """
-        if torch.cuda.is_available():
-            view_1, view_2 = view_1.cuda(), view_2.cuda()
+        view_1, view_2 = view_1.to(self.device), view_2.to(self.device)
         return view_1.unsqueeze(1), view_2.unsqueeze(1)
 
     def _update_progress_bar(self, progress_bar: tqdm, epoch: int, batch_count: int, total_loss: float) -> None:
@@ -414,6 +413,47 @@ class Trainer:
             else:
                 self.continue_warmup = False
 
+    def _measure_inference_time(self, model, num_iters):
+        start_time = time.time()
+        total_samples = 0
+        with torch.no_grad():
+            for i, (inputs, _, _) in enumerate(self.test_loader):
+                if i >= num_iters:
+                    break
+                inputs = inputs.unsqueeze(1).to('cpu')
+                model.encode(inputs)
+                total_samples += inputs.size(0)
+        end_time = time.time()
+        duration = end_time - start_time
+        print(f"Processed {total_samples} samples in {duration} seconds.")
+        return duration, total_samples
+
+    def trace_and_measure_inference(self, num_iters=100):
+        self.model.to('cpu')
+        self.model.eval()
+
+        # Measure inference time before tracing
+        time_pre_trace, total_samples_pre = self._measure_inference_time(self.model, num_iters)
+        freq_pre_trace = total_samples_pre / time_pre_trace
+
+        # Trace the encode method
+        sample_inputs, _, _ = next(iter(self.test_loader))
+        sample_inputs = sample_inputs.unsqueeze(1).to('cpu')
+        traced_model = torch.jit.trace_module(
+            self.model,
+            {'encode': sample_inputs}
+        )
+        torch.jit.save(traced_model, 'output/traced_model.pth')
+
+        # Load the traced model
+        traced_model2 = torch.jit.load('output/traced_model.pth')
+
+        # Measure inference time after tracing
+        time_post_trace, total_samples_post = self._measure_inference_time(traced_model2, num_iters)
+        freq_post_trace = total_samples_post / time_post_trace
+
+        return traced_model, freq_pre_trace, freq_post_trace
+
 
 def main():
     trainer = Trainer()
@@ -421,6 +461,8 @@ def main():
     trainer.train()
     results = trainer.test(plot=True)
     print(results)
+    traced_model, freq_pre_trace, freq_post_trace = trainer.trace_and_measure_inference()
+    print(f'Inference Frequency - Bef. Model Tracing: {freq_pre_trace} - Aft. Model Tracing {freq_post_trace}')
 
 
 if __name__ == '__main__':

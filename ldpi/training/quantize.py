@@ -7,8 +7,8 @@ from torch import nn
 
 import data
 import utils
+from model import MLP
 from options import LDPIOptions
-from network import MLP
 from training import test
 
 random.seed(0)
