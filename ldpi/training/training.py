@@ -5,6 +5,7 @@ from typing import Optional, Tuple
 import numpy as np
 import torch
 import torch.optim as optim
+import torch.quantization
 from torch import Tensor
 from torch.optim import SGD
 from torch.optim.lr_scheduler import CosineAnnealingLR
@@ -223,6 +224,7 @@ class Trainer:
         mult_labels = torch.zeros(size=(dataset_size,), dtype=torch.long, device=self.device)
 
         with torch.no_grad():
+            start, num_samples = time.time(), 0
             for i, (inputs, targets, bin_targets) in enumerate(self.test_loader):
                 inputs, targets, bin_targets = inputs.to(self.device).unsqueeze(1), targets.to(self.device), bin_targets.to(self.device)
 
@@ -231,11 +233,13 @@ class Trainer:
                 dist = torch.sum((outputs - self.center) ** 2, dim=1)
                 c_targets = torch.where(bin_targets == 1, 0, 1)
 
-                batch_index = i * 64
-                scores[batch_index: batch_index + 64] = dist
-                bin_labels[batch_index: batch_index + 64] = c_targets
-                mult_labels[batch_index: batch_index + 64] = targets
-
+                batch_index = i * self.batch_size
+                scores[batch_index: batch_index + self.batch_size] = dist
+                bin_labels[batch_index: batch_index + self.batch_size] = c_targets
+                mult_labels[batch_index: batch_index + self.batch_size] = targets
+                num_samples += targets.size(0)
+            end = time.time()
+            print(f'Number of samples: {num_samples}, Inference time: {end - start}, Freq {num_samples / (end - start)}')
         scores_np = scores.to('cpu').numpy()
         bin_labels_np = bin_labels.to('cpu').numpy()
         mult_labels_np = mult_labels.to('cpu').numpy()
@@ -273,7 +277,74 @@ class Trainer:
                 else:
                     utils.plot_multiclass_anomaly_scores(test_scores=plot_scores_np, labels=plot_mult_labels_np, name=name, threshold=threshold)
 
+        # Save results and thresholds to best model
+        self._save_thresholds(results)
+
         return results
+
+    def trace_and_measure_inference(self):
+        self._move_all_cpu()
+        self.model.eval()
+
+        # Measure inference time before tracing
+        time_pre_trace, total_samples_pre = self._measure_inference_time(self.model)
+        freq_pre_trace = total_samples_pre / time_pre_trace
+
+        # Trace the encode method
+        sample_inputs, _, _ = next(iter(self.test_loader))
+        sample_inputs = sample_inputs.unsqueeze(1).to(self.device)
+        first_input = sample_inputs[0:1]
+        traced_model = torch.jit.trace_module(
+            self.model,
+            {'encode': first_input}
+        )
+        torch.jit.save(traced_model, 'output/traced_model.pth')
+
+        # Load the traced model
+        traced_model = torch.jit.load('output/traced_model.pth')
+
+        # Measure inference time after tracing
+        time_post_trace, total_samples_post = self._measure_inference_time(traced_model)
+        freq_post_trace = total_samples_post / time_post_trace
+
+        return freq_pre_trace, freq_post_trace
+
+    def quantize_model(self, backend: str = 'qnnpack'):  # 'qnnpack' or 'x86
+        """
+        Performs post-training static quantization on the model.
+        """
+        self._move_all_cpu()
+        self.model.eval()
+
+        # Set the backend for quantization
+        torch.backends.quantized.engine = backend
+
+        # Configure the model for quantization
+        self.model.qconfig = torch.quantization.get_default_qconfig(backend)
+
+        # Prepare the model for quantization
+        torch.quantization.prepare(self.model, inplace=True)
+
+        # Calibrate the model using the test loader
+        with torch.no_grad():
+            for i, (inputs, targets, bin_targets) in enumerate(self.test_loader):
+                inputs = inputs.to(self.device).unsqueeze(1)
+                self.model.encode(inputs)
+
+        # Convert the model to a quantized state
+        quantized_model = torch.quantization.convert(self.model, inplace=True)
+        self.model = quantized_model
+
+        # Trace the quantized model using jit.script
+        first_input = inputs[0:1]
+        print(first_input.shape)
+        scripted_quantized_model = torch.jit.script(quantized_model)
+
+        # Save the scripted quantized model to the specified output folder
+        output_folder = 'output'
+        os.makedirs(output_folder, exist_ok=True)
+        output_path = os.path.join(output_folder, 'scripted_quantized_model.pt')
+        torch.jit.save(scripted_quantized_model, output_path)
 
     def _init_center_c(self, loader: DataLoader, apply_threshold: bool = False, eps: float = 0.01) -> None:
         """
@@ -418,7 +489,7 @@ class Trainer:
         total_samples = 0
         with torch.no_grad():
             for i, (inputs, _, _) in enumerate(self.test_loader):
-                inputs = inputs.unsqueeze(1).to('cpu')
+                inputs = inputs.unsqueeze(1).to(self.device)
                 model.encode(inputs)
                 total_samples += inputs.size(0)
         end_time = time.time()
@@ -426,45 +497,50 @@ class Trainer:
         print(f"Processed {total_samples} samples in {duration} seconds.")
         return duration, total_samples
 
-    def trace_and_measure_inference(self):
-        self.model.to('cpu')
-        self.model.eval()
+    def _move_all_cpu(self):
+        self.device = torch.device('cpu')
+        self.model = self.model.to(self.device)
+        self.center = self.center.to(self.device)
 
-        # Measure inference time before tracing
-        time_pre_trace, total_samples_pre = self._measure_inference_time(self.model)
-        freq_pre_trace = total_samples_pre / time_pre_trace
+    def _save_thresholds(self, results):
+        """
+        Saves the results to the best model.
 
-        # Trace the encode method
-        sample_inputs, _, _ = next(iter(self.test_loader))
-        sample_inputs = sample_inputs.unsqueeze(1).to('cpu')
-        traced_model = torch.jit.trace_module(
-            self.model,
-            {'encode': sample_inputs}
-        )
-        torch.jit.save(traced_model, 'output/traced_model.pth')
+        Args:
+            results (dict): The dictionary containing threshold results.
+        """
+        output_dir = 'output'
+        model_save_path = os.path.join(output_dir, 'best_model_with_center.pth')
 
-        # Load the traced model
-        traced_model = torch.jit.load('output/traced_model.pth')
+        # Check if the best model file exists
+        if os.path.isfile(model_save_path):
+            saved_state = torch.load(model_save_path)
+        else:
+            # Throw an error if the file doesn't exist
+            raise FileNotFoundError("Best model file does not exist.")
 
-        # Measure inference time after tracing
-        time_post_trace, total_samples_post = self._measure_inference_time(traced_model)
-        freq_post_trace = total_samples_post / time_post_trace
+        # Update the saved state with new results
+        saved_state['results'] = results
 
-        self.model = traced_model.to(self.device)
-
-        return freq_pre_trace, freq_post_trace
+        # Save the updated state back to the file
+        torch.save(saved_state, model_save_path)
+        print("Thresholds saved to the model file.")
 
 
 def main():
     trainer = Trainer()
     trainer.pretrain()
     trainer.train()
+
+    # Testing trained model
     results = trainer.test(plot=True)
     print(results)
+
+    # Tracing trained model
     freq_pre_trace, freq_post_trace = trainer.trace_and_measure_inference()
     print(f'Inference Frequency - Bef. Model Tracing: {freq_pre_trace} - Aft. Model Tracing {freq_post_trace}')
-    results = trainer.test(plot=True)
-    print(results)
+
+    trainer.quantize_model()
 
 
 if __name__ == '__main__':

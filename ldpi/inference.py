@@ -1,15 +1,15 @@
 import math
+import os
 import sys
 import time
 from queue import Queue
-from typing import Dict, Set, Optional
+from typing import Dict, Set
 from typing import Tuple, List
 
 import dpkt
 import numpy
 import numpy as np
 import torch
-from torch.nn import Module
 
 from options import LDPIOptions
 from utils import SnifferSubscriber, Color, flow_key_to_str
@@ -18,38 +18,46 @@ from utils import SnifferSubscriber, Color, flow_key_to_str
 class LightDeepPacketInspection(SnifferSubscriber):
     def __init__(self) -> None:
         super(LightDeepPacketInspection, self).__init__()
-        self.args = LDPIOptions().parse()
-
-        # LDPI related attributes
-        self.model: Optional[Module] = None
-        self.backend: str = 'qnnpack'
-        self.center: Optional[torch.Tensor] = None
-        self.device: str = 'cpu'
-        self.threshold: float = 0.0
-        self.model_loaded: bool = False
+        # Initialize LDPIOptions
+        self.args = LDPIOptions()
 
         # Sniffer related attributes
         self.flows_tcp: Dict[Tuple[bytes, int, bytes, int], int] = {}
         self.flows_udp: Dict[Tuple[bytes, int, bytes, int], int] = {}
-        self.c_tcp: Dict[Tuple[bytes, int, bytes, int], int] = {}
-        self.c_udp: Dict[Tuple[bytes, int, bytes, int], int] = {}
+        self.checked_tcp: Dict[Tuple[bytes, int, bytes, int], int] = {}
+        self.checked_udp: Dict[Tuple[bytes, int, bytes, int], int] = {}
         self.black_list: Set[Tuple[bytes, int, bytes, int]] = set()
         self.to_process: Queue = Queue()
 
-        self.model_loaded = self.init_model()
+        # LDPI related attributes
+        self.quantized = False
+        self.backend: str = 'qnnpack'
 
-    def init_model(self) -> bool:
-        print('Initializing model...')
+        # Initialize the model
+        self.model_loaded: bool = self.init_model()
+
+    def init_model(self, store_models_path: str = 'ldpi/training/output'):
         try:
-            self.center = torch.from_numpy(np.load('ldpi/trained_model/center.npy'))
-            self.threshold = np.load('ldpi/trained_model/threshold.npy')
+            # Load center and thresholds
+            model_save_path = os.path.join(store_models_path, 'best_model_with_center.pth')
 
-            self.model = MLP(input_size=self.args.n * self.args.l, num_features=512, rep_dim=50)
-            if self.backend == 'qnnpack':
-                torch.backends.quantized.engine = 'qnnpack'
-                self.model = torch.jit.load('ldpi/trained_model/quantized.pt')
+            if os.path.isfile(model_save_path):
+                print('Loading best model and center from saved state')
+                saved_state = torch.load(model_save_path)
+                self.center = saved_state['center']
+                self.nn_threshold = saved_state['results']['99.99th']['threshold']
+                self.max_threshold = saved_state['results']['max']['threshold']
+            if self.quantized:
+                print('Loading quantized model')
+                if self.backend == 'qnnpack':
+                    torch.backends.quantized.engine = 'qnnpack'
+                quantized_model_path = os.path.join(store_models_path, 'quantized_model.pth')
+                self.model = torch.jit.load(quantized_model_path)
             else:
-                self.model.load_state_dict(torch.load('ldpi/trained_model/trained_model.pt', map_location=torch.device(self.device)))
+                print('Loading traced model')
+                traced_model_path = os.path.join(store_models_path, 'traced_model.pth')
+                self.model = torch.jit.load(traced_model_path)
+
             self.model.eval()
             return True
         except Exception as e:
@@ -250,4 +258,4 @@ class LightDeepPacketInspection(SnifferSubscriber):
 
     def get_buffers(self, protocol: str) -> tuple:
         """ Return the correct buffers """
-        return (self.flows_tcp, self.c_tcp) if protocol == 'tcp' else (self.flows_udp, self.c_udp)
+        return (self.flows_tcp, self.checked_tcp) if protocol == 'tcp' else (self.flows_udp, self.checked_udp)

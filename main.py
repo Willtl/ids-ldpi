@@ -1,10 +1,10 @@
 from ldpi.inference import LightDeepPacketInspection
-from options import Options
+from options import SnifferOptions
 from sniffer.sniffer import Sniffer
 
 
 def main():
-    args: Options = Options()
+    args: SnifferOptions = SnifferOptions()
     snf = Sniffer(args)
     snf.add_subscriber(LightDeepPacketInspection())
 
