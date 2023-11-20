@@ -413,13 +413,11 @@ class Trainer:
             else:
                 self.continue_warmup = False
 
-    def _measure_inference_time(self, model, num_iters):
+    def _measure_inference_time(self, model):
         start_time = time.time()
         total_samples = 0
         with torch.no_grad():
             for i, (inputs, _, _) in enumerate(self.test_loader):
-                if i >= num_iters:
-                    break
                 inputs = inputs.unsqueeze(1).to('cpu')
                 model.encode(inputs)
                 total_samples += inputs.size(0)
@@ -428,12 +426,12 @@ class Trainer:
         print(f"Processed {total_samples} samples in {duration} seconds.")
         return duration, total_samples
 
-    def trace_and_measure_inference(self, num_iters=100):
+    def trace_and_measure_inference(self):
         self.model.to('cpu')
         self.model.eval()
 
         # Measure inference time before tracing
-        time_pre_trace, total_samples_pre = self._measure_inference_time(self.model, num_iters)
+        time_pre_trace, total_samples_pre = self._measure_inference_time(self.model)
         freq_pre_trace = total_samples_pre / time_pre_trace
 
         # Trace the encode method
@@ -446,13 +444,15 @@ class Trainer:
         torch.jit.save(traced_model, 'output/traced_model.pth')
 
         # Load the traced model
-        traced_model2 = torch.jit.load('output/traced_model.pth')
+        traced_model = torch.jit.load('output/traced_model.pth')
 
         # Measure inference time after tracing
-        time_post_trace, total_samples_post = self._measure_inference_time(traced_model2, num_iters)
+        time_post_trace, total_samples_post = self._measure_inference_time(traced_model)
         freq_post_trace = total_samples_post / time_post_trace
 
-        return traced_model, freq_pre_trace, freq_post_trace
+        self.model = traced_model.to(self.device)
+
+        return freq_pre_trace, freq_post_trace
 
 
 def main():
@@ -461,8 +461,10 @@ def main():
     trainer.train()
     results = trainer.test(plot=True)
     print(results)
-    traced_model, freq_pre_trace, freq_post_trace = trainer.trace_and_measure_inference()
+    freq_pre_trace, freq_post_trace = trainer.trace_and_measure_inference()
     print(f'Inference Frequency - Bef. Model Tracing: {freq_pre_trace} - Aft. Model Tracing {freq_post_trace}')
+    results = trainer.test(plot=True)
+    print(results)
 
 
 if __name__ == '__main__':
