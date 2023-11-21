@@ -1,7 +1,6 @@
 import os
 import threading
 import time
-from queue import Queue
 from typing import Dict, Set, Optional, Tuple, List
 
 import dpkt
@@ -33,7 +32,7 @@ class TrainedModel:
         chosen_threshold float: Chosen threshold given arguments.
     """
 
-    def __init__(self, threshold_type: str = 'max', quantized: bool = False, backend: str = 'qnnpack', store_models_path: str = 'ldpi/training/output'):
+    def __init__(self, args: LDPIOptions, quantized: bool = False, backend: str = 'qnnpack', store_models_path: str = 'ldpi/training/output', batch_size: int = 32):
         """
         Initializes the TrainedModel instance with specified parameters.
 
@@ -41,12 +40,14 @@ class TrainedModel:
             store_models_path (str): Path to the model storage directory.
             quantized (bool): Specifies if the model is quantized.
             backend (str): Backend used for the quantized model.
+            batch_size (int): How many flows are dequeued and processed per time.
         """
 
-        self.threshold_type: str = threshold_type
+        self.args: LDPIOptions = args
         self.store_models_path: str = store_models_path
         self.quantized: bool = quantized
         self.backend: str = backend
+        self.batch_size: int = batch_size
         self.model: Optional[torch.jit.ScriptModule] = None
         self.center: Optional[torch.Tensor] = None
         self.ninety_nine_threshold: Optional[float] = None
@@ -96,40 +97,56 @@ class TrainedModel:
         """
         Initializes the threshold based on the threshold_type.
         """
-        if self.threshold_type == 'ninety_nine':
+        if self.args.threshold_type == 'ninety_nine':
             return self.ninety_nine_threshold
-        elif self.threshold_type == 'near_max':
+        elif self.args.threshold_type == 'near_max':
             return self.near_max_threshold
-        elif self.threshold_type == 'max':
+        elif self.args.threshold_type == 'max':
             return self.max_threshold
-        elif self.threshold_type == 'hundred_one':
+        elif self.args.threshold_type == 'hundred_one':
             return self.hundred_one_threshold
         else:
-            raise ValueError(f"Invalid threshold_type: {self.threshold_type}. Supported values are 'max' and 'nn'.")
+            raise ValueError(f"Invalid threshold_type: {self.args.threshold_type}. Supported values are 'max' and 'nn'.")
 
-    def prepare_tensors(self, to_process: Queue) -> Tuple[List[FlowKeyType], torch.Tensor]:
+    def prepare_tensors(self, to_process: List[Tuple[FlowKeyType, List[np.ndarray]]], black_list: Set[bytes]) -> Tuple[List[FlowKeyType], torch.Tensor]:
         """
-        Prepares tensors for processing by concatenating numpy arrays into torch tensors.
+        Prepares tensors for processing by concatenating numpy arrays into torch tensors. Assumes the input list contains tuples of flow key type and a list of numpy arrays.
+        It ignores flows with source IPs present in the black list.
 
-        This method extracts items from a queue, concatenates numpy arrays into tensors,
-        and stacks all tensors into a single tensor. It returns a list of keys and a stacked tensor.
+        Args:
+            to_process (List[Tuple[FlowKeyType, List[np.ndarray]]]): List of tuples, where each tuple contains a flow key and a list of numpy arrays.
+            black_list (Set[bytes]): Set of blacklisted source IPs.
 
         Returns:
             Tuple[List[FlowKeyType], torch.Tensor]: A tuple containing a list of keys and a stacked tensor.
         """
-
         keys, samples = [], []
-        while not to_process.empty():
-            flow_key, np_flows = to_process.get()  # Retrieve an item from the queue
-            keys.append(flow_key)  # Append the key to the keys list
+
+        # Process items from the list respecting the batch size
+        while to_process and len(samples) < self.batch_size:
+            flow_key, np_flows = to_process.pop(-1)
+
+            # Check if the source IP (flow_key[0]) is blacklisted
+            if flow_key[0] in black_list:
+                print(f'{flow_key_to_str(flow_key)} not processing this flow since source is blacklisted')
+                continue
+
+            # Pad with zeros if the number of packets is less than self.args.n
+            if len(np_flows) < self.args.n:
+                padding_length = self.args.l * (self.args.n - len(np_flows))
+                padding = np.zeros(padding_length, dtype=np_flows[0].dtype)
+                np_flows.append(padding)
+
+            keys.append(flow_key)
 
             # Normalize and convert concatenated numpy arrays to a torch tensor with float32 data type
             concatenated_tensor = torch.tensor(np.concatenate(np_flows) / 255.0, dtype=torch.float32)
-            samples.append(concatenated_tensor)  # Append the tensor to the samples list
+            samples.append(concatenated_tensor)
 
         # Stack all sample tensors along the first dimension if there are any samples
         if samples:
             samples = torch.stack(samples)
+
         return keys, samples
 
     def infer(self, network_flows: torch.Tensor) -> torch.Tensor:
@@ -165,7 +182,7 @@ class LightDeepPacketInspection(SnifferSubscriber):
         self.args = LDPIOptions()
 
         # Initialize the trained model with specified parameters
-        self.trained_model = TrainedModel(threshold_type=self.args.threshold_type, quantized=False)
+        self.trained_model = TrainedModel(self.args, quantized=False)
 
         # Sniffer related attributes
         self.flows_tcp: Dict[FlowKeyType, List[np.ndarray]] = {}
@@ -173,7 +190,7 @@ class LightDeepPacketInspection(SnifferSubscriber):
         self.checked_tcp: Set[FlowKeyType] = set()
         self.checked_udp: Set[FlowKeyType] = set()
         self.black_list: Set[bytes] = set()
-        self.to_process: Queue = Queue()
+        self.to_process: List[Tuple[FlowKeyType, List[np.ndarray]]] = []
 
         # Set up threading to run sniff() in a separate thread
         self.thread = threading.Thread(target=self.analyze_flows)
@@ -184,21 +201,27 @@ class LightDeepPacketInspection(SnifferSubscriber):
 
     def analyze_flows(self):
         while not self.stopped():
-            keys, samples = self.trained_model.prepare_tensors(self.to_process)
+            keys, samples = self.trained_model.prepare_tensors(self.to_process, self.black_list)
             if keys:
+                # Perform inference
                 anomalies = self.trained_model.infer(samples)
 
-                # Process each key and corresponding anomaly detection result
-                for key, is_anomaly in zip(keys, anomalies):
-                    if is_anomaly:
-                        # If anomaly detected, add the source IP to the blacklist
-                        self.black_list.add(key[0])
-                        print(Color.FAIL + f'Anomaly detected in flow {flow_key_to_str(key)}, LDPI blacklisted (dropping packets from): {key[0]}' + Color.ENDC)
-                    else:
-                        print(Color.OKGREEN + f'No anomaly detected in flow {flow_key_to_str(key)}' + Color.ENDC)
+                # Computed blacklisted flows
+                self._black_list_flows(keys, anomalies)
+
             time.sleep(0.1)
 
-    def new_packet(self, flow_key: tuple, protocol: int, timestamp: int, ip: dpkt.ip.IP) -> None:
+    def _black_list_flows(self, keys: List[FlowKeyType], anomalies: torch.Tensor) -> None:
+        # Process each key and corresponding anomaly detection result
+        for key, is_anomaly in zip(keys, anomalies):
+            if is_anomaly:
+                # If anomaly detected, add the source IP to the blacklist
+                self.black_list.add(key[0])
+                print(Color.FAIL + f'Anomaly detected in flow {flow_key_to_str(key)}, LDPI blacklisted (ignoring packets from): {key[0]}' + Color.ENDC)
+            else:
+                print(Color.OKGREEN + f'No anomaly detected in flow {flow_key_to_str(key)}' + Color.ENDC)
+
+    def new_packet(self, flow_key: FlowKeyType, protocol: int, timestamp: int, ip: dpkt.ip.IP) -> None:
         # Drop all packets in case src_ip is on black list
         if flow_key[0] in self.black_list:
             return
@@ -228,14 +251,13 @@ class LightDeepPacketInspection(SnifferSubscriber):
 
         # Queue to analysis on FIN or when a flow reaches the desired packet count 'n'
         if protocol == 6 and (ip.data.flags & dpkt.tcp.TH_FIN):
-            print('put from FIN')
-            self.to_process.put((flow_key, flow))
+            self.to_process.append((flow_key, flow))
             self.teardown(flow_key, protocol)
             # str_key = flow_key_to_str(flow_key)
             # print(Color.OKBLUE + f'{str_key} queued for detection (FIN) ({self.to_process.qsize()})' + Color.ENDC)
         elif len(flow) == self.args.n:
             checked_flows.add(flow_key)
-            self.to_process.put((flow_key, flow))
+            self.to_process.append((flow_key, flow))
             del flows[flow_key]
             # str_key = flow_key_to_str(flow_key)
             # print(Color.OKBLUE + f'{str_key} queued for detection (RDY) ({self.to_process.qsize()})' + Color.ENDC)
@@ -265,3 +287,5 @@ class LightDeepPacketInspection(SnifferSubscriber):
     def get_buffers(self, protocol: int) -> Tuple[Dict[FlowKeyType, List[np.ndarray]], Set[FlowKeyType]]:
         """ Return the correct buffers given protocol number """
         return (self.flows_tcp, self.checked_tcp) if protocol == 6 else (self.flows_udp, self.checked_udp)
+
+# TODO: add thread that periodically checks for flows that were not queued due to not meeting criteria of minimum amount of packets
