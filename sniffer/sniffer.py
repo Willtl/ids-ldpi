@@ -4,9 +4,13 @@ import time
 from typing import List, Optional, Tuple, Dict
 
 import dpkt
-# import netifaces as ni
-# import pcap  # prev: this comes from python-libpcap library => now: actually pypcap https://github.com/pynetwork/pypcap
+import netifaces as ni
+import pcap
 from tqdm import tqdm
+
+# prev: this comes from python-libpcap library => now: actually pypcap https://github.com/pynetwork/pypcap
+# Note for pypcap
+# sudo apt-get install libpcap-dev is requirements for pypcap
 
 from options import SnifferOptions
 from utils import ModuleInterface, SnifferSubscriber, Color, get_flow_key, sec_to_ns
@@ -44,7 +48,7 @@ class Sniffer(ModuleInterface):
         Sniff packets and process them.
         """
         self.local_ip = ni.ifaddresses(self.args.interface)[ni.AF_INET][0]['addr']
-        sniffer = pcap.pcap(name=self.args.interface, promisc=True, immediate=True, timestamp_in_ns=True)
+        sniffer = pcap.pcap(name=self.args.interface, promisc=False, immediate=True, timestamp_in_ns=True)
         sniffer.setfilter(f'not ether broadcast and src not {self.local_ip}')
         print(Color.BOLD + f'Sniffing {self.args.interface} started, ' + Color.ENDC)
         print(Color.BOLD + f'not ether broadcast and src not {self.local_ip}' + Color.ENDC)
@@ -163,7 +167,8 @@ class Sniffer(ModuleInterface):
 
         # Store the fragment in the cache
         if fragment_key not in self.fragments_cache:
-            self.fragments_cache[fragment_key] = {'fragments': [], 'total_length': None, 'last_timestamp': timestamp, 'current_length': 0}
+            self.fragments_cache[fragment_key] = {'fragments': [], 'total_length': None, 'last_timestamp': timestamp,
+                                                  'current_length': 0}
 
         # Multiply the offset by 8 to get the actual byte offset
         self.fragments_cache[fragment_key]['fragments'].append(((ip.off & dpkt.ip.IP_OFFMASK) * 8, raw_payload))
@@ -241,7 +246,8 @@ class Sniffer(ModuleInterface):
         for subscriber in self.subscribers:
             subscriber.start()
 
-    def report_packet(self, flow_key: Tuple[bytes, int, bytes, int], protocol: int, timestamp: int, ip: dpkt.ip.IP) -> None:
+    def report_packet(self, flow_key: Tuple[bytes, int, bytes, int], protocol: int, timestamp: int,
+                      ip: dpkt.ip.IP) -> None:
         """
         Reports a new packet to the subscribers.
         """

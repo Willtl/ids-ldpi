@@ -9,7 +9,7 @@ class SnifferOptions:
         self.delay: bool = False
         self.session: bool = False
         self.aggregate_csvs: bool = True
-        self.interface: str = 'enp5s0'
+        self.interface: str = 'wlp0s20f3'
         self.timeout: int = 120
         self.cleaning_cycle: int = 60
         self.time_window: int = 60

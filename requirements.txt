@@ -7,4 +7,6 @@ tqdm
 dpkt
 matplotlib
 cycler
+pypcap
 torch
+netifaces
