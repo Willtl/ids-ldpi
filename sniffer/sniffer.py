@@ -1,17 +1,15 @@
 import logging
-import sys
 import threading
 import time
 from typing import List, Optional, Tuple, Dict
 
 import dpkt
-import netifaces as ni
-import pcap  # prev: this comes from python-libpcap library => now: actually pypcap https://github.com/pynetwork/pypcap
+# import netifaces as ni
+# import pcap  # prev: this comes from python-libpcap library => now: actually pypcap https://github.com/pynetwork/pypcap
 from tqdm import tqdm
 
-import utils
 from options import SnifferOptions
-from utils import (ModuleInterface, SnifferSubscriber, Color, get_flow_key)
+from utils import ModuleInterface, SnifferSubscriber, Color, get_flow_key, sec_to_ns
 
 protocol_classes = {
     dpkt.ip.IP_PROTO_TCP: dpkt.tcp.TCP,
@@ -25,7 +23,7 @@ class Sniffer(ModuleInterface):
     def __init__(self, args: SnifferOptions):
         super(Sniffer, self).__init__()
         self.args: SnifferOptions = args
-        self.timeout_ns: int = utils.sec_to_ns(self.args.timeout)
+        self.timeout_ns: int = sec_to_ns(self.args.timeout)
         self.flows_tcp: Dict[Tuple[bytes, int, bytes, int], int] = {}
         self.flows_udp: Dict[Tuple[bytes, int, bytes, int], int] = {}
         self.local_ip: Optional[str] = None
@@ -35,8 +33,10 @@ class Sniffer(ModuleInterface):
         # Set up threading to run sniff() in a separate thread
         self.thread = threading.Thread(target=self.sniff)
 
-    def run(self) -> None:
+    def run(self, daemon: bool = True) -> None:
+        self.thread.daemon = daemon
         self.thread.start()
+        self.start_subscribers()
 
     # @abstractmethod
     def sniff(self) -> None:
@@ -49,17 +49,11 @@ class Sniffer(ModuleInterface):
         print(Color.BOLD + f'Sniffing {self.args.interface} started, ' + Color.ENDC)
         print(Color.BOLD + f'not ether broadcast and src not {self.local_ip}' + Color.ENDC)
 
-        try:
-            for ts, buf in sniffer:
-                if self.stopped():
-                    sniffer.close()
-                    break
-                self.process_packet(ts, buf)
-        except (KeyboardInterrupt, SystemExit):
-            print('Stopping sniffer')
-            sniffer.close()
-            self.stop()
-            sys.exit()
+        for ts, buf in sniffer:
+            if self.stopped():
+                sniffer.close()
+                break
+            self.process_packet(ts, buf)
 
     def process_packet(self, ts: int, buf: bytes, index: Optional[int] = -1) -> None:
         """
@@ -163,7 +157,7 @@ class Sniffer(ModuleInterface):
         if fragment_key in self.fragments_cache:
             last_timestamp = self.fragments_cache[fragment_key].get('last_timestamp', 0)
             # Check if the time difference is greater than 60 seconds
-            if timestamp - last_timestamp > utils.sec_to_ns(60):
+            if timestamp - last_timestamp > sec_to_ns(60):
                 # Reset the buffer
                 self.fragments_cache[fragment_key] = {'fragments': [], 'total_length': None, 'current_length': 0}
 
@@ -265,42 +259,51 @@ class Sniffer(ModuleInterface):
 class SnifferPcap(Sniffer):
     def __init__(self, args: SnifferOptions):
         super(SnifferPcap, self).__init__(args)
-        self.current_pcap_path: str = ''
+        self._current_pcap_path: str = ''
 
     def set_pcap_path(self, path: str):
         """
         Sets the path of the current pcap file to process.
         """
-        self.current_pcap_path = path
+        self._current_pcap_path = path
 
-    def sniff(self, log_periodicity: int = 10000) -> None:
+    def sniff(self, show_tqdm: bool = True) -> None:
         """
         Sniffs packets from a pcap file and processes them.
+
+        Args:
+        show_tqdm (bool): Flag to show or hide tqdm progress bar.
         """
         self.flows_tcp: dict = {}
         self.flows_udp: dict = {}
 
-        prev = None
-        with open(self.current_pcap_path, 'rb') as file:
-            logging.info(f'Preprocessing {self.current_pcap_path}')
+        prev_ts = None
+        logging.info(f'Preprocessing {self._current_pcap_path}')
+        with open(self._current_pcap_path, 'rb') as file:
             pcap_file = list(dpkt.pcap.Reader(file))
-            print(f'Processing {self.current_pcap_path}')
-            time.sleep(0.1)  # Sleep so IO does not overlap with tqdm
-            for i, (ts, buf) in tqdm(enumerate(pcap_file), desc='Processing packets', total=len(pcap_file)):
-                if prev is None:
-                    prev = ts
+            print(f'Processing {self._current_pcap_path}')
+            time.sleep(0.1)  # Sleep to avoid IO overlap with tqdm
 
-                ts_ns = utils.sec_to_ns(ts)
+            # Enumerate over packets
+            packet_iter = enumerate(pcap_file)
+            if show_tqdm:
+                packet_iter = tqdm(packet_iter, desc='Processing packets', total=len(pcap_file))
+
+            for i, (ts, buf) in packet_iter:
+                # Handle delay between packets
+                if prev_ts is not None:
+                    delay = ts - prev_ts
+                    if delay > 0 and self.args.delay:
+                        time.sleep(delay)
+                prev_ts = ts
+
+                # Process each packet
+                ts_ns = sec_to_ns(ts)
                 self.process_packet(ts_ns, buf)
-
-                # Sleep if delay is on
-                if self.args.delay:
-                    time.sleep(ts - prev)
-                    prev = ts
 
     def finalize(self):
         """
         Finalizes processing and notifies subscribers.
         """
         for subscriber in self.subscribers:
-            subscriber.finalize_features(self.current_pcap_path)
+            subscriber.finalize_features(self._current_pcap_path)

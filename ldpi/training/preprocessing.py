@@ -167,18 +167,14 @@ class LDPIPreProcessing(SnifferSubscriber):
         if checked_flows.get(flow_key, False):
             return
 
-        # On inference, here must be sure flow key is not blacklisted, then drop if it is
-        # if blacklist.get(flow_key, False):
-        #     return
-
-        # For TCP packets, check for FIN flag
+        # For TCP packets, check for FIN/RST flags
         if protocol == 6:
             if ip.data.flags & dpkt.tcp.TH_RST and ip.data.flags & dpkt.tcp.TH_ACK:
                 self.teardown(flow_key, protocol)
                 return
 
         # Extract packet bytes, anonymize if necessary
-        ip_bytes = self._anonymize_packet(ip)
+        ip_bytes = anonymize_packet(ip)
 
         # Manage flow
         flow = flows.setdefault(flow_key, [])
@@ -193,25 +189,6 @@ class LDPIPreProcessing(SnifferSubscriber):
             checked_flows[flow_key] = True
             self.to_process.put((flow_key, flow))
             del flows[flow_key]
-
-    def _anonymize_packet(self, ip: dpkt.ip.IP) -> bytes:
-        """
-        Anonymizes an IP packet by removing certain bytes.
-
-        Parameters:
-            ip: The IP layer of the packet.
-
-        Returns:
-            Anonymized bytes of the packet.
-        """
-        ip_bytes = bytes(ip)
-
-        # IP header is the first 20 bytes of the IP packet
-        # Source IP is at bytes 12-15 and Destination IP is at bytes 16-19
-        # We remove these bytes to anonymize the packet
-        anonymized_ip_bytes = ip_bytes[:12] + ip_bytes[20:]
-
-        return anonymized_ip_bytes
 
     # Remove flows entries in case of teardown
     def teardown(self, flow_key: tuple, protocol: int) -> None:
@@ -243,21 +220,10 @@ class LDPIPreProcessing(SnifferSubscriber):
                 if j < flow_length:
                     # Process actual packets in the flow
                     packet = flow[j]
-
-                    if len(packet) > self.args.l:
-                        packet = packet[:self.args.l]  # Trim to length l
-
-                    np_buff_tmp = np.frombuffer(bytes(packet), dtype=np.uint8)
-
-                    # If smaller than l pad with zeros, trim otherwise
-                    if len(np_buff_tmp) < self.args.l:
-                        np_buff = np.zeros(self.args.l)
-                        np_buff[0:len(np_buff_tmp)] = np_buff_tmp
-                    else:
-                        np_buff = np_buff_tmp[:self.args.l]
+                    np_buff = trim_or_pad_packet(packet, self.args.l)
                 else:
-                    # Pad with l zero bytes for missing packets
-                    np_buff = np.zeros(self.args.l)
+                    # Create zero byte packets for missing packets
+                    np_buff = np.zeros(self.args.l, dtype=np.uint8)
 
                 norm_flows[i][j * self.args.l: (j + 1) * self.args.l] = np_buff
         if False:
@@ -297,6 +263,52 @@ class LDPIPreProcessing(SnifferSubscriber):
             os.makedirs(self.current_path)
 
 
+def anonymize_packet(ip: dpkt.ip.IP) -> bytes:
+    """
+    Anonymizes an IP packet by removing certain bytes.
+
+    Parameters:
+        ip: The IP layer of the packet.
+
+    Returns:
+        Anonymized bytes of the packet.
+    """
+    ip_bytes = bytes(ip)
+
+    # IP header is the first 20 bytes of the IP packet
+    # Source IP is at bytes 12-15 and Destination IP is at bytes 16-19
+    # We remove these bytes to anonymize the packet
+    anonymized_ip_bytes = ip_bytes[:12] + ip_bytes[20:]
+
+    return anonymized_ip_bytes
+
+
+def trim_or_pad_packet(packet: bytes, length: int) -> np.ndarray:
+    """
+    Trims or pads the packet to the desired length.
+
+    Args:
+        packet (bytes): The packet to process.
+        length (int): Desired length of the packet.
+
+    Returns:
+        np.ndarray: The processed packet.
+    """
+    # Trim to length in case packet is larger than length
+    if len(packet) > length:
+        packet = packet[:length]
+
+    np_buff = np.frombuffer(bytes(packet), dtype=np.uint8)
+
+    # If smaller than the desired length, pad with zeros
+    if len(np_buff) < length:
+        padded_np_buff = np.zeros(length, dtype=np.uint8)
+        padded_np_buff[0:len(np_buff)] = np_buff
+        return padded_np_buff
+
+    return np_buff
+
+
 def main():
     # Process PCAP into network flow samples
     sniffer_args = SnifferOptions()
@@ -309,8 +321,7 @@ def main():
 
     fsnf = SnifferPcap(sniffer_args)
     fsnf.subscribers.append(LDPIPreProcessing())
-    fsnf.run()
-    fsnf.join()
+    fsnf.run(daemon=False)
 
 
 if __name__ == '__main__':

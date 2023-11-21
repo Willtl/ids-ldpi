@@ -163,7 +163,8 @@ class Trainer:
         self.device: torch.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.model = ResCNNContrastive().to(self.device)
         self.center: Optional[Tensor] = None
-        self.best_dr = 0.0
+        self.max_best_dr = None
+        self.best_sep_score = None
         self.best_model_state = None
 
     def pretrain(self) -> None:
@@ -251,14 +252,18 @@ class Trainer:
         bool_normal = ~bool_abnormal
         normal = scores_np[bool_normal]
         abnormal = scores_np[bool_abnormal]
+        results['separation_score'] = abnormal.min() - normal.max()
 
         # Compute 99.99th threshold and max threshold
-        nine_nine_threshold = np.percentile(normal, 99.99)
-        nine_nine_threshold = np.nextafter(nine_nine_threshold, np.inf)
+        ninety_nine_threshold = np.percentile(normal, 99)
+        ninety_nine_threshold = np.nextafter(ninety_nine_threshold, np.inf)
+        near_max_threshold = np.percentile(normal, 99.99)
+        near_max_threshold = np.nextafter(near_max_threshold, np.inf)
         max_threshold = np.max(normal)
         max_threshold = np.nextafter(max_threshold, np.inf)
+        hundred_one_threshold = max_threshold * 1.01
 
-        for name, threshold in [('99.99th', nine_nine_threshold), ('max', max_threshold)]:
+        for name, threshold in [('ninety_nine', ninety_nine_threshold), ('near_max', near_max_threshold), ('max', max_threshold), ('hundred_one', hundred_one_threshold)]:
             acc, prec, rec, f_score = utils.perf_measure(threshold, bin_labels_np, scores_np)
             results[name] = {'threshold': threshold, 'acc': acc, 'prec': prec, 'rec': rec, 'f_score': f_score}
 
@@ -276,9 +281,6 @@ class Trainer:
                     utils.plot_anomaly_score_dists(test_scores=plot_scores_np, labels=plot_bin_labels_np, name=name, threshold=threshold)
                 else:
                     utils.plot_multiclass_anomaly_scores(test_scores=plot_scores_np, labels=plot_mult_labels_np, name=name, threshold=threshold)
-
-        # Save results and thresholds to best model
-        self._save_thresholds(results)
 
         return results
 
@@ -343,7 +345,7 @@ class Trainer:
         # Save the scripted quantized model to the specified output folder
         output_folder = 'output'
         os.makedirs(output_folder, exist_ok=True)
-        output_path = os.path.join(output_folder, 'scripted_quantized_model.pt')
+        output_path = os.path.join(output_folder, 'scripted_quantized_model.pth')
         torch.jit.save(scripted_quantized_model, output_path)
 
     def _init_center_c(self, loader: DataLoader, apply_threshold: bool = False, eps: float = 0.01) -> None:
@@ -399,6 +401,7 @@ class Trainer:
             saved_state = torch.load(model_save_path)
             self.model.load_state_dict(saved_state['model_state_dict'])
             self.center = saved_state['center']
+            print(self.center)
             return True
         return False
 
@@ -463,10 +466,19 @@ class Trainer:
         if (epoch + 1) % per_validation == 0 or epoch < self.warmup_epochs:
             print("Validation for early stopping at epoch:", epoch + 1)
             results = self.test(plot=False, multiclass=False)
-            print(results)
-            rec = results['99.99th']['rec']
-            if rec > self.best_dr:
-                self.best_dr = rec
+
+            max_dr = results['max']['prec']
+            separation_sccore = results['separation_score']
+            print('max', max_dr)
+            print('separation_sccore', separation_sccore)
+
+            # Compare current model's performance with the best so far
+            if self.max_best_dr is None or max_dr > self.max_best_dr or (max_dr == self.max_best_dr and separation_sccore > self.best_sep_score):
+                # Update the best detection rates
+                self.max_best_dr = max_dr
+                self.best_sep_score = separation_sccore
+
+                # Save the current model as the best model
                 self.best_model_state = self.model.state_dict().copy()
                 print("New best model found!")
 
@@ -476,8 +488,10 @@ class Trainer:
                     os.makedirs(output_dir)
                 save_dict = {
                     'model_state_dict': self.best_model_state,
-                    'center': self.center
+                    'center': self.center,
+                    'results': results
                 }
+
                 model_save_path = os.path.join(output_dir, 'best_model_with_center.pth')
                 torch.save(save_dict, model_save_path)
                 self.continue_warmup = True
@@ -501,30 +515,6 @@ class Trainer:
         self.device = torch.device('cpu')
         self.model = self.model.to(self.device)
         self.center = self.center.to(self.device)
-
-    def _save_thresholds(self, results):
-        """
-        Saves the results to the best model.
-
-        Args:
-            results (dict): The dictionary containing threshold results.
-        """
-        output_dir = 'output'
-        model_save_path = os.path.join(output_dir, 'best_model_with_center.pth')
-
-        # Check if the best model file exists
-        if os.path.isfile(model_save_path):
-            saved_state = torch.load(model_save_path)
-        else:
-            # Throw an error if the file doesn't exist
-            raise FileNotFoundError("Best model file does not exist.")
-
-        # Update the saved state with new results
-        saved_state['results'] = results
-
-        # Save the updated state back to the file
-        torch.save(saved_state, model_save_path)
-        print("Thresholds saved to the model file.")
 
 
 def main():

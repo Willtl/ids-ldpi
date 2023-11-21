@@ -13,8 +13,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 from cycler import cycler
 from dpkt.compat import compat_ord
+from scipy.integrate import quad
 from scipy.interpolate import interp1d
 from scipy.optimize import brentq
+from scipy.stats import gaussian_kde
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 from sklearn.metrics import roc_curve, auc
 
@@ -435,3 +437,20 @@ def perf_measure(threshold, y_true, scores):
     recall = recall_score(y_true, y_pred, zero_division=0)
     f_score = f1_score(y_true, y_pred, zero_division=0)
     return accuracy, precision, recall, f_score
+
+
+def calculate_overlap_coefficient(normal_scores, abnormal_scores):
+    # Estimate the PDFs using Kernel Density Estimation
+    kde_normal = gaussian_kde(normal_scores)
+    kde_abnormal = gaussian_kde(abnormal_scores)
+
+    # Define a function to compute the minimum of the two PDFs
+    min_pdf = lambda x: min(kde_normal(x), kde_abnormal(x))
+
+    # Define the range for integration (cover the range of both score sets)
+    min_score = min(normal_scores.min(), abnormal_scores.min())
+    max_score = max(normal_scores.max(), abnormal_scores.max())
+
+    # Compute the overlap coefficient by integrating the minimum PDF
+    overlap_area, _ = quad(min_pdf, min_score, max_score)
+    return overlap_area
