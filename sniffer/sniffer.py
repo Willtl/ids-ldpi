@@ -8,7 +8,7 @@ import netifaces as ni
 import pcap
 from tqdm import tqdm
 
-# prev: this comes from python-libpcap library => now: actually pypcap https://github.com/pynetwork/pypcap
+# this comes from python-libpcap library => now: actually pypcap https://github.com/pynetwork/pypcap
 # Note for pypcap
 # sudo apt-get install libpcap-dev is requirements for pypcap
 

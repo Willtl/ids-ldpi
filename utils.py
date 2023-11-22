@@ -361,8 +361,20 @@ def plot_anomaly_score_dists(test_scores, labels, name, threshold, add_legend=Fa
     if add_legend:
         ax.legend()
 
+    # Your code to create the figure
     fig.tight_layout()
-    plt.savefig(f'output/{name}.pdf', bbox_inches='tight', format='pdf', dpi=800)
+
+    # Define the plot path and ensure the directory exists
+    plot_path = 'output/plots/'
+    os.makedirs(plot_path, exist_ok=True)
+
+    # Use os.path.join to create the full file path
+    file_path = os.path.join(plot_path, f'{name}.pdf')
+
+    # Save the plot
+    plt.savefig(file_path, bbox_inches='tight', format='pdf', dpi=800)
+
+    # Close the figure
     plt.close(fig)
 
 

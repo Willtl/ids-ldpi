@@ -7,11 +7,10 @@ from sniffer.sniffer import SnifferPcap, Sniffer
 
 def main():
     args = SnifferOptions()
-    # snf = SnifferPcap(args)
+    snf = SnifferPcap(args)
     snf = Sniffer(args)
-    # snf.set_pcap_path('datasets/USTC-TFC-2016/Cridex.pcap')
     # snf.set_pcap_path('datasets/TII-SSRC-23/pcap/benign/video/rtp.pcap')
-    # snf.set_pcap_path('datasets/TII-SSRC-23/pcap/malicious/mirai-botnet/mirai_ddos_syn.pcap')
+    # snf.set_pcap_path('datasets/TII-SSRC-23/pcap/malicious/dos/fin_tcp_dos.pcap')
     ldpi = LightDeepPacketInspection()
     snf.add_subscriber(ldpi)
     snf.run()
@@ -19,7 +18,7 @@ def main():
     # Decision engine loop
     try:
         while True:
-            time.sleep(0.1)
+            time.sleep(1.0)
     except (KeyboardInterrupt, SystemExit):
         print("Shutting down...")
         snf.stop()
