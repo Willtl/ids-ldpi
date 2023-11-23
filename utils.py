@@ -5,6 +5,7 @@ import socket
 import threading
 from abc import ABC, abstractmethod
 from enum import Enum
+from typing import Tuple
 
 import dpkt
 import matplotlib as mpl
@@ -19,6 +20,8 @@ from scipy.optimize import brentq
 from scipy.stats import gaussian_kde
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 from sklearn.metrics import roc_curve, auc
+
+FlowKeyType = Tuple[bytes, int, bytes, int]
 
 
 class ModuleInterface(ABC, threading.Thread):

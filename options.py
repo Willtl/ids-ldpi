@@ -41,8 +41,14 @@ class LDPIOptions:
         self.n = 4
         self.l = 60
 
-        # Threshold type
-        self.threshold_type = 'max'
+        # Training related
+        self.model_name = 'MLP'
+        self.batch_size: int = 64  # training batch size
+        self.pretrain_epochs: int = 2000  # how many epochs to pretrain using contrastive learning
+        self.epochs: int = 400  # how many epochs to fine tune
+
+        # Inference related arguments
+        self.threshold_type: str = 'max'
 
         # Parse the options
         self.parse_options()
@@ -56,6 +62,8 @@ class LDPIOptions:
         parser.add_argument('--l', type=int, default=self.l, help='size of each packet in the samples')
 
         # Anomaly detection sensitivity parameters
+        parser.add_argument('--model_name', choices=['MLP', 'ResCNN'], default=self.threshold_type,
+                            help='Threshold strategy for anomaly detection. A higher threshold results in a lower False Alarm Rate (FAR).')
         parser.add_argument('--threshold_type', choices=['ninety_nine', 'near_max', 'max', 'hundred_one'], default=self.threshold_type,
                             help='Threshold strategy for anomaly detection. A higher threshold results in a lower False Alarm Rate (FAR).')
 
