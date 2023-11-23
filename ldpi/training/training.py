@@ -15,7 +15,7 @@ from tqdm import tqdm
 import data
 import utils
 from losses import OneClassContrastiveLoss
-from model import ResCNNContrastive
+from model import ResCNNContrastive, ResCNNEmbedding
 from options import LDPIOptions
 
 
@@ -60,7 +60,6 @@ class ContrastivePretrainer:
         batch_count, total_loss = 0, 0
         for view_1, view_2 in self.data_loader:
             view_1, view_2 = self._prepare_data_for_device(view_1, view_2)
-
             loss = self._compute_loss(view_1, view_2)
 
             self.optimizer.zero_grad()
@@ -79,7 +78,7 @@ class ContrastivePretrainer:
 
     def _prepare_data_for_device(self, view_1: torch.Tensor, view_2: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         view_1, view_2 = view_1.to(self.device), view_2.to(self.device)
-        return view_1.unsqueeze(1), view_2.unsqueeze(1)
+        return view_1, view_2
 
     def _update_progress_bar(self, progress_bar: tqdm, epoch: int, batch_count: int, total_loss: float) -> None:
         learning_rate = self.optimizer.param_groups[0]["lr"]
@@ -94,18 +93,24 @@ class Trainer:
         self.train_loader: Optional[DataLoader] = None
         self.test_loader: Optional[DataLoader] = None
         self.device: torch.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.model = ResCNNContrastive().to(self.device)
+        self.model: Optional[ResCNNContrastive] = None
         self.center: Optional[Tensor] = None
         self.max_best_dr = None
         self.best_sep_score = None
         self.best_model_state = None
+
+        self._initialize_model()
+
+    def _initialize_model(self):
+        self.model = ResCNNContrastive().to(self.device)
+        self.model = ResCNNEmbedding().to(self.device)
 
     def pretrain(self) -> None:
         # Generate data, create datasets and dataloaders
         loader = data.get_pretrain_dataloader(dataset='TII-SSRC-23', batch_size=self.args.batch_size, contrastive=True)
 
         # Check if the pretrained model exists, else pretrain it
-        model_path = 'output/pretrained_model.pth'
+        model_path = f'output/{self.args.model_name}/pretrained_model.pth'
         if os.path.exists(model_path):
             print("Pretrained model found. Loading model...")
             try:
@@ -116,7 +121,10 @@ class Trainer:
         else:
             pretrainer = ContrastivePretrainer(self.args, self.model, loader)
             pretrainer.pretrain()
-            torch.save(self.model.state_dict(), model_path)
+
+            traced_model_path = f'output/{self.args.model_name}'
+            os.makedirs(traced_model_path, exist_ok=True)
+            torch.save(self.model.state_dict(), f'{traced_model_path}/pretrained_model.pth')
 
         loader = data.get_pretrain_dataloader(dataset='TII-SSRC-23', batch_size=self.args.batch_size, contrastive=False, shuffle=False, drop_last=False)
         self._init_center_c(loader)
@@ -146,7 +154,7 @@ class Trainer:
         with torch.no_grad():
             start, num_samples = time.time(), 0
             for i, (inputs, targets, bin_targets) in enumerate(self.test_loader):
-                inputs, targets, bin_targets = inputs.to(self.device).unsqueeze(1), targets.to(self.device), bin_targets.to(self.device)
+                inputs, targets, bin_targets = inputs.to(self.device), targets.to(self.device), bin_targets.to(self.device)
 
                 outputs = self.model.encode(inputs)
 
@@ -213,7 +221,7 @@ class Trainer:
 
         # Trace the encode method
         sample_inputs, _, _ = next(iter(self.test_loader))
-        sample_inputs = sample_inputs.unsqueeze(1).to(self.device)
+        sample_inputs = sample_inputs.to(self.device)
         first_input = sample_inputs[0:1]
         traced_model = torch.jit.trace_module(
             self.model,
@@ -250,7 +258,7 @@ class Trainer:
         # Calibrate the model using the test loader
         with torch.no_grad():
             for i, (inputs, targets, bin_targets) in enumerate(self.test_loader):
-                inputs = inputs.to(self.device).unsqueeze(1)
+                inputs = inputs.to(self.device)
                 self.model.encode(inputs)
 
         # Convert the model to a quantized state
@@ -263,7 +271,7 @@ class Trainer:
         scripted_quantized_model = torch.jit.script(quantized_model)
 
         # Save the scripted quantized model to the specified output folder
-        output_folder = 'output'
+        output_folder = f'output/{self.args.model_name}'
         os.makedirs(output_folder, exist_ok=True)
         output_path = os.path.join(output_folder, 'scripted_quantized_model.pth')
         torch.jit.save(scripted_quantized_model, output_path)
@@ -275,9 +283,9 @@ class Trainer:
         with torch.no_grad():
             total_outputs, n_samples = 0, 0
             for inputs, *_ in loader:
-                inputs = inputs.unsqueeze(1).to(self.device)
+                inputs = inputs.to(self.device)
 
-                # Encode the inputs and unsqueeze to get [bs, 1, feat] shape
+                # Encode the inputs and to get [bs, 1, feat] shape
                 outputs = self.model.encode(inputs.to(self.device))
 
                 # Sum the outputs for the current batch and add to the total
@@ -301,7 +309,7 @@ class Trainer:
 
     def _load_model_and_data(self):
         self.train_loader, self.test_loader = data.get_training_dataloader(dataset='TII-SSRC-23')
-        model_save_path = 'output/best_model_with_center.pth'
+        model_save_path = f'output/{self.args.model_name}/best_model_with_center.pth'
         if os.path.isfile(model_save_path):
             print('Loading best model and center from saved state')
             saved_state = torch.load(model_save_path)
@@ -336,7 +344,7 @@ class Trainer:
         for inputs, targets, bin_targets in self.train_loader:
             self.optimizer.zero_grad()
 
-            inputs, bin_targets = inputs.to(self.device).unsqueeze(1), bin_targets.to(self.device)
+            inputs, bin_targets = inputs.to(self.device), bin_targets.to(self.device)
 
             outputs = self.model.encode(inputs)
             dist = torch.sum((outputs - self.center) ** 2, dim=1)
@@ -364,7 +372,7 @@ class Trainer:
             print("Validation for early stopping at epoch:", epoch + 1)
             results = self.test(plot=False, multiclass=False)
 
-            max_dr = results['max']['prec']
+            max_dr = results['max']['rec']
             separation_sccore = results['separation_score']
             print('max', max_dr)
             print('separation_sccore', separation_sccore)
@@ -399,7 +407,7 @@ class Trainer:
         total_samples = 0
         with torch.no_grad():
             for i, (inputs, _, _) in enumerate(self.test_loader):
-                inputs = inputs.unsqueeze(1).to(self.device)
+                inputs = inputs.to(self.device)
                 model.encode(inputs)
                 total_samples += inputs.size(0)
         end_time = time.time()

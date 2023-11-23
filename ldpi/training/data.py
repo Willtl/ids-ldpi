@@ -47,19 +47,15 @@ class OneClassContrastiveDataset(Dataset):
         self.n_samples = samples.shape[0]
 
         # Create fake outliers
-        self.outlier_noisy = self.inject_random_noise(samples)
-        self.outlier_reversed = self.reverse_sequences(samples)
-        self.outlier_shuffled = self.shuffle_sequences(samples)
-        self.outlier_inverted = self.invert_values(samples)
+        self._create_outliers()
 
-    def inject_random_noise(self, samples, noise_level=0.05):
-        noise = np.random.uniform(-noise_level, noise_level, samples.shape)
-        noisy_samples = np.clip(samples + noise, 0, 1)
-        return noisy_samples
-
-    def reverse_sequences(self, samples):
-        reversed_samples = np.flip(samples, axis=1)
-        return reversed_samples
+    def _create_outliers(self):
+        self.out_shuffled = self.shuffle_sequences(self.samples)
+        self.out_random_insert = self.random_byte_insertion(self.samples)
+        self.out_scaled = self.byte_value_scaling(self.samples)
+        self.out_random_delete = self.random_byte_deletion(self.samples)
+        self.out_periodic_noised = self.periodic_noise_addition(self.samples)
+        self.all_outliers = [self.out_shuffled, self.out_random_insert, self.out_scaled, self.out_random_delete, self.out_periodic_noised]
 
     def shuffle_sequences(self, samples):
         shuffled_samples = np.copy(samples)
@@ -67,61 +63,104 @@ class OneClassContrastiveDataset(Dataset):
             np.random.shuffle(s)
         return shuffled_samples
 
-    def invert_values(self, samples):
-        inverted_samples = 1 - samples
-        return inverted_samples
+    def random_byte_insertion(self, samples):
+        outlier_samples = np.copy(samples)
+        for sample in outlier_samples:
+            num_insertions = random.randint(1, len(sample) // 10)  # Number of insertions
+            for _ in range(num_insertions):
+                insert_index = random.randint(0, len(sample) - 1)
+                byte_to_insert = np.random.randint(0, 256)
+                sample = np.insert(sample, insert_index, byte_to_insert)
+        return outlier_samples
+
+    def byte_value_scaling(self, samples):
+        outlier_samples = np.copy(samples)
+        for sample in outlier_samples:
+            scale_factor = random.uniform(0.5, 2)
+            sample = np.round(sample * scale_factor)  # Scale and round to nearest integer
+            np.clip(sample, 0, 255, out=sample)  # Clipping to keep values in byte range
+        return outlier_samples
+
+    def random_byte_deletion(self, samples):
+        outlier_samples = np.copy(samples)
+        for sample in outlier_samples:
+            num_deletions = random.randint(1, len(sample) // 10)  # Number of deletions
+            for _ in range(num_deletions):
+                delete_index = random.randint(0, len(sample) - 1)
+                sample = np.delete(sample, delete_index)
+        return outlier_samples
+
+    def periodic_noise_addition(self, samples):
+        outlier_samples = np.copy(samples)
+        for sample in outlier_samples:
+            frequency = random.uniform(0.1, 0.5) * np.pi
+            amplitude = random.uniform(5, 30)
+            noise = amplitude * np.sin(np.linspace(0, frequency * len(sample), len(sample)))
+            sample = np.round(sample + noise)  # Add noise and round to nearest integer
+            np.clip(sample, 0, 255, out=sample)  # Clipping to keep values in byte range
+        return outlier_samples
 
     def transform(self, sample):
-        # Randomly select an augmentation to apply
-        augs = [self.temporal_scaling, self.jittering, self.random_segment_permutation]
-        augmented = np.random.choice(augs)(sample)
+        # List of augmentation functions
+        aug_funcs = [self.mask_with_prob, self.invert_values, self.reverse_sequences]
+
+        # Shuffle the list of augmentation functions
+        random.shuffle(aug_funcs)
+
+        # Apply the first augmentation function
+        augmented = aug_funcs[0](sample)
+
+        # Initialize probability for subsequent functions
+        probability = 0.5
+
+        # Apply the remaining augmentation functions with decreasing probability
+        for aug_func in aug_funcs[1:]:
+            if random.random() < probability:
+                augmented = aug_func(augmented)
+                probability *= 0.5  # Decrease the probability by half
+
+        # Apply crop_and_resize
         augmented = self.crop_and_resize(augmented)
+
         return augmented
 
     def crop_and_resize(self, sample):
         original_length = len(sample)
         scale = np.random.uniform(0.1, 1.0)
         crop_size = int(original_length * scale)
-        start = np.random.randint(0, len(sample) - crop_size)
+        start = np.random.randint(0, original_length - crop_size)
         cropped_sample = sample[start:start + crop_size]
-        # Linear interpolation to resize back to original sequence length
-        return interp1d(np.linspace(0, crop_size - 1, num=crop_size), cropped_sample, kind='linear', fill_value='extrapolate')(np.arange(original_length))
 
-    def temporal_scaling(self, sample):
-        original_length = len(sample)
-        scale = np.random.uniform(0.8, 1.2)  # Adjust scaling factors as needed
-        scaled_length = int(original_length * scale)
-        indices = np.linspace(0, original_length - 1, num=scaled_length)
-        scaled_sample = interp1d(np.arange(original_length), sample, kind='linear')(indices)
-
-        # Adjust the length to match the original length
-        if scaled_length < original_length:
-            # Extend the sequence to the original length
-            additional_indices = np.linspace(scaled_length, original_length - 1, num=original_length - scaled_length)
-            extended_sample = interp1d(np.arange(scaled_length), scaled_sample, kind='linear', fill_value='extrapolate')(additional_indices)
-            return np.concatenate([scaled_sample, extended_sample])
+        # Nearest-neighbor interpolation
+        if crop_size != original_length:
+            interp_function = interp1d(np.linspace(0, crop_size - 1, num=crop_size), cropped_sample, kind='nearest', fill_value='extrapolate')
+            resized_sample = interp_function(np.linspace(0, crop_size - 1, num=original_length)).astype(int)
+            return resized_sample
         else:
-            # Trim the sequence to the original length
-            return scaled_sample[:original_length]
+            return cropped_sample
 
-    def jittering(self, sample, noise_level=0.02):
-        noise = np.random.normal(0, noise_level, len(sample))
-        return np.clip(sample + noise, 0, 1)
+    def mask_with_prob(self, sample, drop_probability=0.01, drop_value=256):
+        mask = np.random.rand(len(sample)) < drop_probability
+        masked_sample = np.copy(sample)
+        masked_sample[mask] = drop_value
+        return masked_sample
 
-    def random_segment_permutation(self, sample, num_segments=5):
-        segment_length = len(sample) // num_segments
-        segments = [sample[i * segment_length:(i + 1) * segment_length] for i in range(num_segments)]
-        np.random.shuffle(segments)
-        return np.concatenate(segments)
+    def reverse_sequences(self, sample):
+        reversed_sample = np.flip(sample, axis=0)
+        return reversed_sample
+
+    def invert_values(self, sample):
+        return 256 - sample
 
     def __getitem__(self, index: int) -> Tuple:
         if random.random() < 0.5:
             sample = self.samples[index]
         else:
-            outlier_choice = random.choice([self.outlier_noisy, self.outlier_reversed, self.outlier_shuffled, self.outlier_inverted])
+            outlier_choice = random.choice(self.all_outliers)
             sample = outlier_choice[index]
         v1, v2 = self.transform(sample), self.transform(sample)
-        v1, v2 = torch.from_numpy(v1).float(), torch.from_numpy(v2).float()
+        v1, v2 = torch.from_numpy(v1), torch.from_numpy(v2)
+
         return v1, v2
 
     def __len__(self) -> int:
@@ -177,7 +216,8 @@ def load_data_from_folder(dataset_name: str, category: str, counter: int) -> Tup
             if folder_data is None:
                 continue
 
-            folder_data = folder_data.astype(np.float32) / 255.0
+            # folder_data = folder_data.astype(np.float32) / 255.0
+            folder_data = folder_data.astype(np.int32)
             samples.append(folder_data)
             labels = np.ones(folder_data.shape[0]) * counter
 
@@ -207,13 +247,13 @@ def load_data(dataset: str, test_size: float = 0.20, only_normal: bool = False) 
 
     if not only_normal:
         label_counter, malware_data, malware_labels = load_data_from_folder(dataset, 'malicious', counter=label_counter)
-        anomaly = np.concatenate(malware_data).astype(np.float32)
+        anomaly = np.concatenate(malware_data).astype(np.int32)
         anomaly_targets = np.concatenate(malware_labels).astype(int)
     else:
-        anomaly = np.array([]).astype(np.float32)
+        anomaly = np.array([]).astype(np.int32)
         anomaly_targets = np.array([]).astype(int)
 
-    normal = np.concatenate(benign_data).astype(np.float32)
+    normal = np.concatenate(benign_data).astype(np.int32)
     normal_targets = np.concatenate(benign_labels).astype(int)
 
     data = np.concatenate((normal, anomaly)) if not only_normal else normal
@@ -232,11 +272,11 @@ def load_data(dataset: str, test_size: float = 0.20, only_normal: bool = False) 
         train = df
         test = pd.DataFrame(columns=['sample', 'target', 'bin_target'])
 
-    train_samples = np.array(train['sample'].tolist()).astype(np.float32)
+    train_samples = np.array(train['sample'].tolist()).astype(np.int32)
     train_targets = np.array(train['target'].tolist()).astype(int)
     train_bin_targets = np.array(train['bin_target'].tolist()).astype(int)
 
-    test_samples = np.array(test['sample'].tolist()).astype(np.float32)
+    test_samples = np.array(test['sample'].tolist()).astype(np.int32)
     test_targets = np.array(test['target'].tolist()).astype(int)
     test_bin_targets = np.array(test['bin_target'].tolist()).astype(int)
 

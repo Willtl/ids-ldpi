@@ -4,8 +4,8 @@ import time
 from typing import List, Optional, Tuple, Dict
 
 import dpkt
-import netifaces as ni
-import pcap
+# import netifaces as ni
+# import pcap
 from tqdm import tqdm
 
 from options import SnifferOptions
