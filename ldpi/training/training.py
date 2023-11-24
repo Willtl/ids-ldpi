@@ -278,32 +278,32 @@ class Trainer:
 
     def _init_center_c(self, loader: DataLoader, apply_threshold: bool = False, eps: float = 0.01) -> None:
         self.center = torch.zeros(self.model.feat_dim, device=self.device)
-
-        self.model.eval()
-        with torch.no_grad():
-            total_outputs, n_samples = 0, 0
-            for inputs, *_ in loader:
-                inputs = inputs.to(self.device)
-
-                # Encode the inputs and to get [bs, 1, feat] shape
-                outputs = self.model.encode(inputs.to(self.device))
-
-                # Sum the outputs for the current batch and add to the total
-                total_outputs += outputs.sum(0)
-                n_samples += outputs.size(0)
-
-        self.center = total_outputs / n_samples
-
-        # Apply epsilon threshold
-        if apply_threshold:
-            # Create a mask for values less than epsilon
-            eps_mask = np.abs(self.center) < eps
-
-            # Apply -eps to elements where mask is True and value is negative
-            self.center = np.where(eps_mask & (self.center < 0), -eps, self.center)
-
-            # Apply eps to elements where mask is True and value is positive
-            self.center = np.where(eps_mask & (self.center > 0), eps, self.center)
+        #
+        # self.model.eval()
+        # with torch.no_grad():
+        #     total_outputs, n_samples = 0, 0
+        #     for inputs, *_ in loader:
+        #         inputs = inputs.to(self.device)
+        #
+        #         # Encode the inputs and to get [bs, 1, feat] shape
+        #         outputs = self.model.encode(inputs.to(self.device))
+        #
+        #         # Sum the outputs for the current batch and add to the total
+        #         total_outputs += outputs.sum(0)
+        #         n_samples += outputs.size(0)
+        #
+        # self.center = total_outputs / n_samples
+        #
+        # # Apply epsilon threshold
+        # if apply_threshold:
+        #     # Create a mask for values less than epsilon
+        #     eps_mask = np.abs(self.center) < eps
+        #
+        #     # Apply -eps to elements where mask is True and value is negative
+        #     self.center = np.where(eps_mask & (self.center < 0), -eps, self.center)
+        #
+        #     # Apply eps to elements where mask is True and value is positive
+        #     self.center = np.where(eps_mask & (self.center > 0), eps, self.center)
 
         print(f'Computed center: {self.center}')
 
@@ -342,9 +342,9 @@ class Trainer:
 
         # Training for each batch
         for inputs, targets, bin_targets in self.train_loader:
-            self.optimizer.zero_grad()
-
             inputs, bin_targets = inputs.to(self.device), bin_targets.to(self.device)
+
+            self.optimizer.zero_grad()
 
             outputs = self.model.encode(inputs)
             dist = torch.sum((outputs - self.center) ** 2, dim=1)

@@ -1,14 +1,14 @@
 import os
 import random
-from typing import List, Optional
-from typing import Tuple
+from typing import List, Tuple, Iterator, Optional
 
 import numpy as np
 import pandas as pd
 import torch
 from scipy.interpolate import interp1d
 from sklearn.model_selection import train_test_split
-from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
+from torch.utils.data import DataLoader, WeightedRandomSampler
+from torch.utils.data import Sampler, Dataset
 
 # Type aliases for clarity (compatible with Python 3.8)
 ArrayFloat = np.ndarray
@@ -167,6 +167,52 @@ class OneClassContrastiveDataset(Dataset):
         return self.n_samples
 
 
+class BalancedBatchSampler(Sampler):
+    """
+    A PyTorch Sampler that generates batches by sampling an equal number of data points from two classes.
+
+    Attributes:
+        normal_indices (List[int]): Indices of samples from the normal class.
+        anomaly_indices (List[int]): Indices of samples from the anomaly class.
+        batch_size (int): Size of the batch.
+        dataset (Dataset): The dataset to sample from.
+
+    Args:
+        dataset (Dataset): Dataset from which to draw samples.
+        batch_size (int): Size of each batch.
+    """
+
+    def __init__(self, dataset: Dataset, batch_size: int) -> None:
+        # Identify indices of normal and anomaly samples
+        super().__init__()
+        self.normal_indices = [i for i, (_, _, bin_target) in enumerate(dataset) if bin_target == 1]
+        self.anomaly_indices = [i for i, (_, _, bin_target) in enumerate(dataset) if bin_target == -1]
+
+        # Store batch size and dataset reference
+        self.batch_size = batch_size
+        self.dataset = dataset
+
+        # Ensure batch size is even for equal class distribution
+        assert batch_size % 2 == 0, "Batch size should be an even number."
+
+    def __iter__(self) -> Iterator[List[int]]:
+        # Calculate half the batch size for equal class distribution
+        half_batch = self.batch_size // 2
+
+        # Shuffle indices to randomize batch composition
+        np.random.shuffle(self.normal_indices)
+        np.random.shuffle(self.anomaly_indices)
+
+        # Generate batches with equal number of normal and anomaly samples
+        for i in range(0, min(len(self.normal_indices), len(self.anomaly_indices)), half_batch):
+            batch_indices = self.normal_indices[i:i + half_batch] + self.anomaly_indices[i:i + half_batch]
+            yield batch_indices
+
+    def __len__(self) -> int:
+        # Calculate the number of batches available
+        return min(len(self.normal_indices), len(self.anomaly_indices)) // (self.batch_size // 2)
+
+
 def make_weights_for_balanced_classes(targets: ArrayInt) -> List[float]:
     """
         Create weights for balanced class sampling.
@@ -303,6 +349,7 @@ def get_training_dataloader(dataset: str, batch_size: int = 64) -> Tuple[DataLoa
 
     weights = make_weights_for_balanced_classes(train_bin_targets)
     sampler = WeightedRandomSampler(torch.DoubleTensor(weights), len(weights))
+    sampler = BalancedBatchSampler(train_ds, batch_size)
 
     train_loader = DataLoader(dataset=train_ds, batch_size=batch_size, sampler=sampler, drop_last=True, num_workers=0)
     test_loader = DataLoader(dataset=test_ds, batch_size=batch_size, shuffle=False, drop_last=False, pin_memory=True)
