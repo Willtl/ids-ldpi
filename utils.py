@@ -323,7 +323,7 @@ def roc(scores, labels, plot=True):
 
 
 # Plot normal/abnormal anomaly score distributions
-def plot_anomaly_score_dists(test_scores, labels, name, threshold, add_legend=False):
+def plot_anomaly_score_dists(model_name, test_scores, labels, name, threshold, add_legend=False):
     # Convert labels to boolean mask
     bool_abnormal = labels.astype(bool)
     bool_normal = ~bool_abnormal
@@ -368,7 +368,7 @@ def plot_anomaly_score_dists(test_scores, labels, name, threshold, add_legend=Fa
     fig.tight_layout()
 
     # Define the plot path and ensure the directory exists
-    plot_path = 'output/plots/'
+    plot_path = f'output/{model_name}/plots/'
     os.makedirs(plot_path, exist_ok=True)
 
     # Use os.path.join to create the full file path

@@ -105,7 +105,7 @@ class Trainer:
         loader = data.get_pretrain_dataloader(dataset='TII-SSRC-23', batch_size=self.args.batch_size, contrastive=True)
 
         # Check if the pretrained model exists, else pretrain it
-        model_path = 'output/pretrained_model.pth'
+        model_path = f'output/{self.args.model_name}/pretrained_model.pth'
         if os.path.exists(model_path):
             print("Pretrained model found. Loading model...")
             try:
@@ -197,9 +197,9 @@ class Trainer:
                 plot_mult_labels_np = mult_labels_np[valid_indices]
 
                 if not multiclass:
-                    utils.plot_anomaly_score_dists(test_scores=plot_scores_np, labels=plot_bin_labels_np, name=name, threshold=threshold)
+                    utils.plot_anomaly_score_dists(self.args.model_name, test_scores=plot_scores_np, labels=plot_bin_labels_np, name=name, threshold=threshold)
                 else:
-                    utils.plot_multiclass_anomaly_scores(test_scores=plot_scores_np, labels=plot_mult_labels_np, name=name, threshold=threshold)
+                    utils.plot_multiclass_anomaly_scores(self.args.model_name, test_scores=plot_scores_np, labels=plot_mult_labels_np, name=name, threshold=threshold)
 
         return results
 
@@ -223,7 +223,8 @@ class Trainer:
         # Create directory and save model
         traced_model_path = f'output/{self.args.model_name}'
         os.makedirs(traced_model_path, exist_ok=True)
-        torch.jit.save(traced_model, f'{traced_model_path}/traced_model.pth')
+        model_save_path = os.path.join(traced_model_path, 'traced_model.pth')
+        torch.jit.save(traced_model, model_save_path)
 
         # Load the traced model
         traced_model = torch.jit.load(f'{traced_model_path}/traced_model.pth')
@@ -263,7 +264,7 @@ class Trainer:
         scripted_quantized_model = torch.jit.script(quantized_model)
 
         # Save the scripted quantized model to the specified output folder
-        output_folder = 'output'
+        output_folder = f'output/{self.args.model_name}'
         os.makedirs(output_folder, exist_ok=True)
         output_path = os.path.join(output_folder, 'scripted_quantized_model.pth')
         torch.jit.save(scripted_quantized_model, output_path)
@@ -301,7 +302,7 @@ class Trainer:
 
     def _load_model_and_data(self):
         self.train_loader, self.test_loader = data.get_training_dataloader(dataset='TII-SSRC-23')
-        model_save_path = 'output/best_model_with_center.pth'
+        model_save_path = f'output/{self.args.model_name}/best_model_with_center.pth'
         if os.path.isfile(model_save_path):
             print('Loading best model and center from saved state')
             saved_state = torch.load(model_save_path)
@@ -364,7 +365,7 @@ class Trainer:
             print("Validation for early stopping at epoch:", epoch + 1)
             results = self.test(plot=False, multiclass=False)
 
-            max_dr = results['max']['prec']
+            max_dr = results['max']['rec']
             separation_sccore = results['separation_score']
             print('max', max_dr)
             print('separation_sccore', separation_sccore)

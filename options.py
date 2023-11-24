@@ -42,7 +42,7 @@ class LDPIOptions:
         self.l = 60
 
         # Training related
-        self.model_name = 'MLP'
+        self.model_name = 'ResCNN'
         self.batch_size: int = 64  # training batch size
         self.pretrain_epochs: int = 2000  # how many epochs to pretrain using contrastive learning
         self.epochs: int = 400  # how many epochs to fine tune

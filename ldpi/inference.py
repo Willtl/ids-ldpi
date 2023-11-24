@@ -37,7 +37,7 @@ class TrainedModel:
             infer: Performs inference on network flows.
         """
 
-    def __init__(self, args: LDPIOptions, quantized: bool = False, backend: str = 'qnnpack', store_models_path: str = 'ldpi/training/output', batch_size: int = 32):
+    def __init__(self, args: LDPIOptions, quantized: bool = False, backend: str = 'qnnpack', batch_size: int = 32):
         """
         Initialize the TrainedModel instance.
 
@@ -49,7 +49,7 @@ class TrainedModel:
             batch_size (int): Size of the batch for processing.
         """
         self.args: LDPIOptions = args
-        self.store_models_path: str = store_models_path
+
         self.quantized: bool = quantized
         self.backend: str = backend
         self.batch_size: int = batch_size
@@ -60,7 +60,10 @@ class TrainedModel:
         self.max_threshold: Optional[float] = None
         self.hundred_one_threshold: Optional[float] = None
 
+        # Load trained model
+        self.store_models_path: str = f'ldpi/training/output/{self.args.model_name}/'
         self._init_model()
+
         self.chosen_threshold: float = self._initialize_threshold()
 
     def _init_model(self) -> None:

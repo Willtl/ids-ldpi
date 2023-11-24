@@ -2,14 +2,14 @@ import time
 
 from ldpi.inference import LightDeepPacketInspection
 from options import SnifferOptions
-from sniffer.sniffer import SnifferPcap, Sniffer
+from sniffer.sniffer import SnifferPcap
 
 
 def main():
     args = SnifferOptions()
     snf = SnifferPcap(args)
-    snf = Sniffer(args)
-    # snf.set_pcap_path('datasets/TII-SSRC-23/pcap/benign/video/rtp.pcap')
+    # snf = Sniffer(args)
+    snf.set_pcap_path('datasets/TII-SSRC-23/pcap/benign/video/rtp.pcap')
     # snf.set_pcap_path('datasets/TII-SSRC-23/pcap/malicious/dos/fin_tcp_dos.pcap')
     ldpi = LightDeepPacketInspection()
     snf.add_subscriber(ldpi)
@@ -23,6 +23,7 @@ def main():
         print("Shutting down...")
         snf.stop()
         ldpi.stop()
+
 
 # test
 
