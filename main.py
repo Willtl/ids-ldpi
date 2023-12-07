@@ -1,8 +1,8 @@
 import time
 
-from ldpi.inference import LightDeepPacketInspection
+from ldpi import LightDeepPacketInspection
 from options import SnifferOptions
-from sniffer.sniffer import SnifferPcap
+from sniffer import SnifferPcap
 
 
 def main():

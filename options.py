@@ -37,7 +37,6 @@ class SnifferOptions:
 class LDPIOptions:
     def __init__(self):
         # Initialize default values
-        self.interface = 'enp5s0'
         self.n = 4
         self.l = 60
 
@@ -57,7 +56,6 @@ class LDPIOptions:
         parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
         # Sniffing and buffering params
-        parser.add_argument('--interface', default=self.interface, help='interface to sniff')
         parser.add_argument('--n', type=int, default=self.n, help='number of packets per sample')
         parser.add_argument('--l', type=int, default=self.l, help='size of each packet in the samples')
 
@@ -70,7 +68,6 @@ class LDPIOptions:
         args = parser.parse_args()
 
         # Update class attributes with parsed arguments
-        self.interface = args.interface
         self.n = args.n
         self.l = args.l
         self.threshold_type = args.threshold_type
