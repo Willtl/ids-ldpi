@@ -1,6 +1,7 @@
 import torch
 import torch.nn.functional as F
 from torch import nn
+from transformers import BertModel, BertConfig
 from tsai.models.all import ResCNN
 
 
@@ -172,4 +173,77 @@ class ResCNNEmbedding(nn.Module):
 
         feat = self.encoder(embedded_x)
         feat = self.head(feat)
+        return feat
+
+
+class TransformerContrastive(nn.Module):
+    """A module for supervised contrastive learning using a Transformer encoder."""
+
+    def __init__(self, num_embeddings=257, dim_mid=128, feat_dim=128, verbose=True):
+        super().__init__()
+        self.dim_mid = dim_mid
+        self.feat_dim = feat_dim
+        self.num_embeddings = num_embeddings
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+        # Instantiate encoder and head
+        self._create_encoder()
+        self._create_head()
+        self._initialize_weights()
+
+        if verbose:
+            print(self)
+            print(f'Model size: {sum([param.nelement() for param in self.parameters()]) / 1000000} (M)')
+
+    def _create_encoder(self):
+        """Create a Transformer encoder."""
+        config = BertConfig(
+            vocab_size=self.num_embeddings,
+            hidden_size=64,
+            num_hidden_layers=4,
+            num_attention_heads=4,
+            intermediate_size=128,
+            max_position_embeddings=240,
+            pad_token_id=256
+        )
+
+        self.encoder = BertModel(config).to(self.device)
+        self.dim_in = self.encoder.config.hidden_size
+
+    def _create_head(self, depth: int = 4):
+        """Create a head model."""
+        layers = [
+            nn.Linear(self.dim_in, self.dim_mid, bias=False),
+            nn.BatchNorm1d(self.dim_mid),
+            nn.ReLU(inplace=True)
+        ]
+        for _ in range(depth - 1):
+            layers.extend([
+                nn.Linear(self.dim_mid, self.dim_mid, bias=False),
+                nn.BatchNorm1d(self.dim_mid),
+                nn.ReLU(inplace=True)
+            ])
+        layers.append(nn.Linear(self.dim_mid, self.feat_dim, bias=False))
+        self.head = nn.Sequential(*layers)
+
+    def _initialize_weights(self):
+        """Initialize weights."""
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight)
+            elif isinstance(m, nn.BatchNorm1d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+
+    def forward(self, x):
+        """Compute forward pass."""
+        # For transformer, x should be [batch_size, seq_length] with tokenized input
+        outputs = self.encoder(x)[1]  # We use the pooled output
+        feat = F.normalize(self.head(outputs), dim=1)
+        return feat
+
+    def encode(self, x):
+        """Compute forward pass for encoding."""
+        outputs = self.encoder(x)[1]
+        feat = self.head(outputs)
         return feat

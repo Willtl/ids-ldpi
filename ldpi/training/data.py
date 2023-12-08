@@ -1,13 +1,13 @@
 import os
 import random
-from typing import List, Tuple, Iterator, Optional
+from typing import List, Tuple, Optional
 
 import numpy as np
 import pandas as pd
 import torch
 from scipy.interpolate import interp1d
 from sklearn.model_selection import train_test_split
-from torch.utils.data import DataLoader, WeightedRandomSampler
+from torch.utils.data import DataLoader
 from torch.utils.data import Sampler, Dataset
 
 # Type aliases for clarity (compatible with Python 3.8)
@@ -19,17 +19,31 @@ DataLoaderType = DataLoader
 
 class CustomDataset(Dataset):
     """
-        Custom dataset class for handling samples and targets.
+    Custom dataset class for handling samples and targets.
     """
 
-    def __init__(self, samples: ArrayFloat, targets: ArrayInt, bin_targets: ArrayInt):
+    def __init__(self, samples, targets, bin_targets):
         self.samples = samples
         self.targets = targets
         self.bin_targets = bin_targets
         self.n_samples = samples.shape[0]
 
-    def __getitem__(self, index: int) -> Tuple[ArrayFloat, int, int]:
-        return self.samples[index], self.targets[index], self.bin_targets[index]
+        # Separate samples into normal and anomalies
+        self.normal_samples = self.samples[self.bin_targets == 1]
+        self.anomaly_samples = self.samples[self.bin_targets == -1]
+        self.normal_targets = self.targets[self.bin_targets == 1]
+        self.anomaly_targets = self.targets[self.bin_targets == -1]
+
+    def __getitem__(self, index: int):
+        # Check if there are any anomalies
+        if len(self.anomaly_samples) > 0 and np.random.rand() > 0.5:
+            # Return anomaly
+            anomaly_index = np.random.randint(len(self.anomaly_samples))
+            return self.anomaly_samples[anomaly_index], self.anomaly_targets[anomaly_index], -1
+        else:
+            # Return normal sample
+            normal_index = index % len(self.normal_samples)
+            return self.normal_samples[normal_index], self.normal_targets[normal_index], 1
 
     def __len__(self) -> int:
         return self.n_samples
@@ -55,7 +69,8 @@ class OneClassContrastiveDataset(Dataset):
         self.out_scaled = self.byte_value_scaling(self.samples)
         self.out_random_delete = self.random_byte_deletion(self.samples)
         self.out_periodic_noised = self.periodic_noise_addition(self.samples)
-        self.all_outliers = [self.out_shuffled, self.out_random_insert, self.out_scaled, self.out_random_delete, self.out_periodic_noised]
+        self.out_slice = self.slice_swap(self.samples)
+        self.all_outliers = [self.out_shuffled, self.out_random_insert, self.out_scaled, self.out_random_delete, self.out_periodic_noised, self.out_slice]
 
     def shuffle_sequences(self, samples):
         shuffled_samples = np.copy(samples)
@@ -63,46 +78,86 @@ class OneClassContrastiveDataset(Dataset):
             np.random.shuffle(s)
         return shuffled_samples
 
-    def random_byte_insertion(self, samples):
-        outlier_samples = np.copy(samples)
-        for sample in outlier_samples:
+    def slice_swap(self, samples):
+        swapped_samples = np.copy(samples)
+        for sample in swapped_samples:
+            # Ensure the slice length is not too large, e.g., between 1/10th and 1/5th of the sample length
+            slice_length = random.randint(1, max(1, len(sample) // 10))
+
+            # Choose two different start points for slices
+            start1 = random.randint(0, len(sample) - slice_length)
+            start2 = random.randint(0, len(sample) - slice_length)
+
+            # Ensuring the second slice doesn't overlap with the first
+            while abs(start1 - start2) < slice_length:
+                start2 = random.randint(0, len(sample) - slice_length)
+
+            # Swap the slices
+            temp = np.copy(sample[start1:start1 + slice_length])
+            sample[start1:start1 + slice_length] = sample[start2:start2 + slice_length]
+            sample[start2:start2 + slice_length] = temp
+
+        return swapped_samples
+
+    def random_byte_insertion(self, samples, padding_value=256):
+        modified_samples = []
+        for sample in samples:
+            length = len(sample)
             num_insertions = random.randint(1, len(sample) // 10)  # Number of insertions
             for _ in range(num_insertions):
                 insert_index = random.randint(0, len(sample) - 1)
-                byte_to_insert = np.random.randint(0, 256)
+                byte_to_insert = np.random.randint(0, 255)
                 sample = np.insert(sample, insert_index, byte_to_insert)
-        return outlier_samples
+            # Pad or trim the sample to max_length
+            if len(sample) < length:
+                sample = np.pad(sample, (0, length - len(sample)), 'constant', constant_values=(padding_value,))
+            else:
+                sample = sample[:length]
+            modified_samples.append(sample)
+        return np.array(modified_samples)
 
     def byte_value_scaling(self, samples):
         outlier_samples = np.copy(samples)
-        for sample in outlier_samples:
+        for idx in range(len(outlier_samples)):
+            sample = outlier_samples[idx]
             scale_factor = random.uniform(0.5, 2)
             sample = np.round(sample * scale_factor)  # Scale and round to nearest integer
-            np.clip(sample, 0, 255, out=sample)  # Clipping to keep values in byte range
+            np.clip(sample, 0, 256, out=sample)  # Clipping to keep values in byte range
+            outlier_samples[idx] = sample  # Store the modified sample back in the array
         return outlier_samples
 
-    def random_byte_deletion(self, samples):
+    def random_byte_deletion(self, samples, padding_value=256):
         outlier_samples = np.copy(samples)
-        for sample in outlier_samples:
+        for idx in range(len(outlier_samples)):
+            sample = outlier_samples[idx]
+            original_length = len(sample)
             num_deletions = random.randint(1, len(sample) // 10)  # Number of deletions
             for _ in range(num_deletions):
                 delete_index = random.randint(0, len(sample) - 1)
                 sample = np.delete(sample, delete_index)
+            # Pad the sample back to original length
+            padding_needed = original_length - len(sample)
+            if padding_needed > 0:
+                sample = np.pad(sample, (0, padding_needed), 'constant', constant_values=(padding_value,))
+            # Store the modified sample back in the array
+            outlier_samples[idx] = sample
         return outlier_samples
 
     def periodic_noise_addition(self, samples):
         outlier_samples = np.copy(samples)
-        for sample in outlier_samples:
+        for idx in range(len(outlier_samples)):
+            sample = outlier_samples[idx]
             frequency = random.uniform(0.1, 0.5) * np.pi
-            amplitude = random.uniform(5, 30)
+            amplitude = random.uniform(1, len(sample) // 10)
             noise = amplitude * np.sin(np.linspace(0, frequency * len(sample), len(sample)))
             sample = np.round(sample + noise)  # Add noise and round to nearest integer
-            np.clip(sample, 0, 255, out=sample)  # Clipping to keep values in byte range
+            np.clip(sample, 0, 256, out=sample)  # Clipping to keep values in byte range
+            outlier_samples[idx] = sample  # Store the modified sample back in the array
         return outlier_samples
 
     def transform(self, sample):
         # List of augmentation functions
-        aug_funcs = [self.mask_with_prob, self.invert_values, self.reverse_sequences]
+        aug_funcs = [self.invert_values, self.reverse_sequences]
 
         # Shuffle the list of augmentation functions
         random.shuffle(aug_funcs)
@@ -126,7 +181,7 @@ class OneClassContrastiveDataset(Dataset):
 
     def crop_and_resize(self, sample):
         original_length = len(sample)
-        scale = np.random.uniform(0.1, 1.0)
+        scale = np.random.uniform(0.5, 1.0)
         crop_size = int(original_length * scale)
         start = np.random.randint(0, original_length - crop_size)
         cropped_sample = sample[start:start + crop_size]
@@ -138,12 +193,6 @@ class OneClassContrastiveDataset(Dataset):
             return resized_sample
         else:
             return cropped_sample
-
-    def mask_with_prob(self, sample, drop_probability=0.01, drop_value=256):
-        mask = np.random.rand(len(sample)) < drop_probability
-        masked_sample = np.copy(sample)
-        masked_sample[mask] = drop_value
-        return masked_sample
 
     def reverse_sequences(self, sample):
         reversed_sample = np.flip(sample, axis=0)
@@ -169,48 +218,51 @@ class OneClassContrastiveDataset(Dataset):
 
 class BalancedBatchSampler(Sampler):
     """
-    A PyTorch Sampler that generates batches by sampling an equal number of data points from two classes.
+    Sampler for creating balanced batches from a dataset with two classes.
+    Ensures each batch contains an equal number of samples from each class.
 
     Attributes:
         normal_indices (List[int]): Indices of samples from the normal class.
         anomaly_indices (List[int]): Indices of samples from the anomaly class.
         batch_size (int): Size of the batch.
-        dataset (Dataset): The dataset to sample from.
+        num_batches (int): Total number of batches.
+        current_batch (int): Index of the current batch.
 
     Args:
         dataset (Dataset): Dataset from which to draw samples.
-        batch_size (int): Size of each batch.
+        batch_size (int): Size of each batch, should be an even number.
     """
 
-    def __init__(self, dataset: Dataset, batch_size: int) -> None:
-        # Identify indices of normal and anomaly samples
-        super().__init__()
-        self.normal_indices = [i for i, (_, _, bin_target) in enumerate(dataset) if bin_target == 1]
-        self.anomaly_indices = [i for i, (_, _, bin_target) in enumerate(dataset) if bin_target == -1]
+    def __init__(self, dataset: Dataset, batch_size: int):
+        # Verify if batch_size is even
+        if batch_size % 2 != 0:
+            raise ValueError("Batch size for BalancedBatchSampler must be an even number.")
 
-        # Store batch size and dataset reference
-        self.batch_size = batch_size
         self.dataset = dataset
+        self.batch_size = batch_size
+        self.normal_indices = [i for i, (_, target, _) in enumerate(dataset) if target == 1]
+        self.anomaly_indices = [i for i, (_, target, _) in enumerate(dataset) if target != 1]
 
-        # Ensure batch size is even for equal class distribution
-        assert batch_size % 2 == 0, "Batch size should be an even number."
+        self.num_batches = min(len(self.normal_indices), len(self.anomaly_indices)) // (batch_size // 2)
+        self.current_batch = 0
 
-    def __iter__(self) -> Iterator[List[int]]:
-        # Calculate half the batch size for equal class distribution
-        half_batch = self.batch_size // 2
-
-        # Shuffle indices to randomize batch composition
+    def __iter__(self):
+        # Randomize the order of indices in each class
         np.random.shuffle(self.normal_indices)
         np.random.shuffle(self.anomaly_indices)
 
-        # Generate batches with equal number of normal and anomaly samples
-        for i in range(0, min(len(self.normal_indices), len(self.anomaly_indices)), half_batch):
-            batch_indices = self.normal_indices[i:i + half_batch] + self.anomaly_indices[i:i + half_batch]
-            yield batch_indices
+        half_batch = self.batch_size // 2
 
-    def __len__(self) -> int:
-        # Calculate the number of batches available
-        return min(len(self.normal_indices), len(self.anomaly_indices)) // (self.batch_size // 2)
+        # Generate balanced batches
+        for _ in range(self.num_batches):
+            normal_batch = self.normal_indices[self.current_batch * half_batch:(self.current_batch + 1) * half_batch]
+            anomaly_batch = self.anomaly_indices[self.current_batch * half_batch:(self.current_batch + 1) * half_batch]
+            self.current_batch += 1
+
+            yield normal_batch + anomaly_batch
+
+    def __len__(self):
+        return self.num_batches
 
 
 def make_weights_for_balanced_classes(targets: ArrayInt) -> List[float]:
@@ -347,11 +399,11 @@ def get_training_dataloader(dataset: str, batch_size: int = 64) -> Tuple[DataLoa
     train_ds = CustomDataset(train_samples, train_targets, train_bin_targets)
     test_ds = CustomDataset(test_samples, test_targets, test_bin_targets)
 
-    weights = make_weights_for_balanced_classes(train_bin_targets)
-    sampler = WeightedRandomSampler(torch.DoubleTensor(weights), len(weights))
-    sampler = BalancedBatchSampler(train_ds, batch_size)
+    print('len train ds', len(train_ds))
 
-    train_loader = DataLoader(dataset=train_ds, batch_size=batch_size, sampler=sampler, drop_last=True, num_workers=0)
+    # Create sampler
+
+    train_loader = DataLoader(dataset=train_ds, batch_size=batch_size, drop_last=True, num_workers=0)
     test_loader = DataLoader(dataset=test_ds, batch_size=batch_size, shuffle=False, drop_last=False, pin_memory=True)
 
     return train_loader, test_loader

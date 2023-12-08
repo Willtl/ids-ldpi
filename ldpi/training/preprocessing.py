@@ -209,7 +209,7 @@ class LDPIPreProcessing(SnifferSubscriber):
 
         # Create 3-dimensional np array (flow->packet->byte)
         sample_size = self.args.n * self.args.l
-        norm_flows = np.zeros([len(samples), sample_size], dtype=np.uint8)
+        norm_flows = np.zeros([len(samples), sample_size], dtype=np.int32)
 
         # Clean/anonymize packets, normalize and trim bytes and fill norm_flows
         for i in range(len(samples)):
@@ -223,7 +223,7 @@ class LDPIPreProcessing(SnifferSubscriber):
                     np_buff = trim_or_pad_packet(packet, self.args.l)
                 else:
                     # Create zero byte packets for missing packets
-                    np_buff = np.zeros(self.args.l, dtype=np.uint8)
+                    np_buff = np.full(self.args.l, 256, dtype=np.int32)
 
                 norm_flows[i][j * self.args.l: (j + 1) * self.args.l] = np_buff
         if False:
@@ -298,11 +298,11 @@ def trim_or_pad_packet(packet: bytes, length: int) -> np.ndarray:
     if len(packet) > length:
         packet = packet[:length]
 
-    np_buff = np.frombuffer(bytes(packet), dtype=np.uint8)
+    np_buff = np.frombuffer(bytes(packet), dtype=np.uint8).astype(np.int32)
 
     # If smaller than the desired length, pad with zeros
     if len(np_buff) < length:
-        padded_np_buff = np.zeros(length, dtype=np.uint8)
+        padded_np_buff = np.full(length, 256, dtype=np.int32)
         padded_np_buff[0:len(np_buff)] = np_buff
         return padded_np_buff
 
