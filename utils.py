@@ -1,56 +1,228 @@
-import datetime
-import glob
-import os
 import socket
 import threading
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Tuple
+from typing import Tuple, Union, Optional
 
 import dpkt
-import numpy as np
-from dpkt.compat import compat_ord
 
-FlowKeyType = Tuple[bytes, int, bytes, int]
+# Define a type for the flow key
+FlowKeyType = Tuple[bytes, int, bytes, int]  # (src_ip, src_port, dst_ip, dst_port)
 
 
 class ModuleInterface(ABC, threading.Thread):
-    """ Basic abstract class for each feature's module """
+    """An abstract base class for feature modules in a network system.
+
+    This class provides basic threading and event handling mechanisms for derived modules.
+
+    Attributes:
+        stop_event (threading.Event): An event to signal the stopping of the module's thread.
+        thread (Optional[threading.Thread]): A thread in which the module's main functionality runs.
+    """
 
     def __init__(self):
         super(ModuleInterface, self).__init__()
         self.stop_event = threading.Event()
-        self.thread: threading.Thread = None
+        self.thread: Optional[threading.Thread] = None
 
     @abstractmethod
     def run(self) -> None:
+        """Starts the module's functionality in a separate thread.
+
+        This method should be overridden to define the module's main behavior.
+        """
         self.thread.start()
 
     def terminate(self) -> None:
+        """Terminates the module.
+
+        This method handles the cleanup and resource deallocation for the module.
+        """
         del self
 
     def stop(self) -> None:
+        """Stops the module's thread.
+
+        Signals the thread to stop and waits for it to join.
+        """
         self.stop_event.set()
         self.thread.join()
 
     def stopped(self) -> bool:
+        """Checks if the module's thread has been stopped.
+
+        Returns:
+            bool: True if the thread has been signaled to stop, False otherwise.
+        """
         return self.stop_event.is_set()
 
 
 class SnifferSubscriber(ModuleInterface):
-    """ Abstract class that must be implemented for any module that subscribes to the sniffer module """
+    """An abstract base class for modules subscribing to a network sniffer module.
+
+    This class defines the interface for modules that react to new network packets and teardown events.
+
+    Methods to be implemented by subclasses:
+        new_packet: Handle a new packet event.
+        teardown: Handle a flow teardown event.
+    """
 
     def __init__(self):
         super(SnifferSubscriber, self).__init__()
 
     @abstractmethod
-    def new_packet(self, flow_key: tuple, protocol: int, timestamp: int, ip: dpkt.ip.IP) -> None:
-        """ Sniffer will call new_packet in case of sniffed packet """
+    def new_packet(self, flow_key: FlowKeyType, protocol: int, timestamp: int, ip: dpkt.ip.IP) -> None:
+        """Handles a new packet event from the sniffer.
+
+        This method should be overridden to define behavior upon receiving a new packet.
+
+        Args:
+            flow_key (FlowKeyType): The key identifying the flow of the packet.
+            protocol (int): The protocol number of the packet.
+            timestamp (int): The timestamp when the packet was captured.
+            ip (dpkt.ip.IP): The IP packet instance.
+        """
         print('new packet')
 
     @abstractmethod
-    def teardown(self, flow_key: tuple, protocol: int) -> None:
-        """ Sniffer will call tear_down in case of flow timeout """
+    def teardown(self, flow_key: FlowKeyType, protocol: int) -> None:
+        """Handles a flow teardown event from the sniffer.
+
+        This method should be overridden to define behavior upon a flow timeout.
+
+        Args:
+            flow_key (FlowKeyType): The key identifying the flow.
+            protocol (int): The protocol number of the flow.
+        """
+
+
+def get_flow_key(src_ip: bytes, src_port: int, dst_ip: bytes, dst_port: int, protocol: int, session: bool) -> tuple:
+    """
+    Generate a flow key based on source and destination IP addresses, ports, and protocol.
+
+    If session is True, the flow key is bidirectional, sorting the endpoints to ensure a consistent
+    order regardless of which direction the flow is observed. If session is False, the flow key is unidirectional,
+    using the source and destination as they are provided.
+
+    Args:
+        src_ip (bytes): The source IP address.
+        src_port (int): The source port number.
+        dst_ip (bytes): The destination IP address.
+        dst_port (int): The destination port number.
+        protocol (int): The protocol number.
+        session (bool): Indicates if the flow is bidirectional (True) or unidirectional (False).
+
+    Returns:
+        tuple: A tuple representing the flow key.
+
+    Example:
+        >>> get_flow_key(b'192.168.1.1', 80, b'192.168.1.2', 443, 6, True)
+        (b'192.168.1.1', 80, b'192.168.1.2', 443, 6)
+    """
+
+    # Handling bidirectional flow
+    if session:
+        # Sorting endpoints to ensure consistent ordering for bidirectional flow
+        sorted_endpoints = sorted([(src_ip, src_port), (dst_ip, dst_port)])
+
+        # Unpacking sorted endpoints to create a flow key
+        ip1, port1 = sorted_endpoints[0]
+        ip2, port2 = sorted_endpoints[1]
+
+        flow_key = (ip1, port1, ip2, port2, protocol)
+    else:
+        # Handling unidirectional flow
+        flow_key = (src_ip, src_port, dst_ip, dst_port, protocol)
+
+    return flow_key
+
+
+def inet_to_str(inet: Union[bytes, bytearray]) -> str:
+    """
+    Converts an IP address from binary format to its string representation.
+
+    This function first attempts to convert the address as IPv4, and if that fails,
+    it tries IPv6.
+
+    Args:
+        inet (Union[bytes, bytearray]): The binary representation of the IP address.
+
+    Returns:
+        str: The string representation of the IP address.
+
+    Example:
+        >>> inet_to_str(b'\x7f\x00\x00\x01')
+        '127.0.0.1'
+    """
+    try:
+        # Convert IPv4 address from binary to string
+        return socket.inet_ntop(socket.AF_INET, inet)
+    except ValueError:
+        # If IPv4 conversion fails, try converting IPv6 address
+        return socket.inet_ntop(socket.AF_INET6, inet)
+
+
+def mac_addr(address: bytes) -> str:
+    """
+    Converts a MAC address from binary format to its string representation.
+
+    Each byte of the address is converted to a two-digit hexadecimal string. These
+    strings are then joined by colons.
+
+    Args:
+        address (bytes): The binary representation of the MAC address.
+
+    Returns:
+        str: The string representation of the MAC address in the format 'XX:XX:XX:XX:XX:XX'.
+
+    Example:
+        >>> mac_addr(b'\x00\x1A\x2B\x3C\x4D\x5E')
+        '00:1a:2b:3c:4d:5e'
+    """
+    return ':'.join('%02x' % b for b in address)
+
+
+def flow_key_to_str(flow_key: tuple) -> tuple:
+    """
+    Convert a flow key to a string representation.
+
+    Args:
+        flow_key (tuple): The flow key consisting of IP addresses and port numbers.
+
+    Returns:
+        tuple: The flow key with IP addresses in string format and port numbers.
+    """
+    # Converting IP addresses to string format and keeping other elements unchanged
+    value = (inet_to_str(flow_key[0]), flow_key[1], inet_to_str(flow_key[2]), flow_key[3], flow_key[4])
+    return value
+
+
+def sec_to_ns(seconds: float) -> int:
+    """
+    Convert seconds to nanoseconds.
+
+    Args:
+        seconds (float): The time in seconds.
+
+    Returns:
+        int: The time in nanoseconds.
+    """
+    # Multiplying seconds by 1e+9 to convert to nanoseconds
+    return int(seconds * 1e+9)
+
+
+def ns_to_sec(nanoseconds: int) -> float:
+    """
+    Convert nanoseconds to seconds.
+
+    Args:
+        nanoseconds (int): The time in nanoseconds.
+
+    Returns:
+        float: The time in seconds.
+    """
+    # Dividing nanoseconds by 1e+9 to convert to seconds
+    return nanoseconds / 1e+9
 
 
 class Dataset(ABC):
@@ -60,30 +232,6 @@ class Dataset(ABC):
     @abstractmethod
     def get_files(self):
         pass
-
-
-class USTC(Dataset):
-
-    @staticmethod
-    def get_files():
-        path = 'USTC-TFC2016'
-        benign = ['Benign/BitTorrent', 'Benign/Facetime', 'Benign/FTP', 'Benign/Gmail', 'Benign/MySQL',
-                  'Benign/Outlook', 'Benign/Skype', 'Benign/WorldOfWarcraft']
-        malicious = []
-
-        return path, benign, malicious
-
-
-class Flag(str, Enum):
-    TH_FIN = 0x01  # end of data
-    TH_SYN = 0x02  # synchronize sequence numbers
-    TH_RST = 0x04  # reset connection
-    TH_PUSH = 0x08  # push
-    TH_ACK = 0x10  # acknowledgment number set
-    TH_URG = 0x20  # urgent pointer set
-    TH_ECE = 0x40  # ECN echo, RFC 3168
-    TH_CWR = 0x80  # congestion window reduced
-    TH_NS = 0x100  # nonce sum, RFC 3540
 
 
 class Color(str, Enum):
@@ -96,135 +244,3 @@ class Color(str, Enum):
     ENDC = '\033[0m'
     BOLD = '\033[1m'
     UNDERLINE = '\033[4m'
-
-
-def get_flow_key(src_ip: bytes, src_port: int, dst_ip: bytes, dst_port: int, protocol: int, session: bool):
-    # If session is True, consider it as bidirectional
-    if session:
-        # Define a list with the source and destination info
-        endpoints = [(src_ip, src_port), (dst_ip, dst_port)]
-
-        # Sort this list - this will sort by IP first, then by port
-        sorted_endpoints = sorted(endpoints)
-
-        # Unpack the sorted list to get the ordered IPs and ports
-        ip1, port1 = sorted_endpoints[0]
-        ip2, port2 = sorted_endpoints[1]
-
-        # Define the flow key as a tuple of these ordered elements
-        flow_key = (ip1, port1, ip2, port2, protocol)
-    else:
-        # If session is False, consider it as unidirectional
-        flow_key = (src_ip, src_port, dst_ip, dst_port, protocol)
-
-    return flow_key
-
-
-def inet_to_str(inet):
-    # First try ipv4 and then ipv6
-    try:
-        return socket.inet_ntop(socket.AF_INET, inet)
-    except ValueError:
-        return socket.inet_ntop(socket.AF_INET6, inet)
-
-
-def mac_addr(address):
-    return ':'.join('%02x' % compat_ord(b) for b in address)
-
-
-def flow_key_to_str(flow_key):
-    value = (inet_to_str(flow_key[0]), flow_key[1], inet_to_str(flow_key[2]), flow_key[3], flow_key[4])
-    return value
-
-
-def print_packet(timestamp, buf):
-    # Print out the timestamp in UTC
-    print('Timestamp: ', str(datetime.datetime.utcfromtimestamp(timestamp)))
-
-    # Unpack the Ethernet frame (mac src/dst, ethertype)
-    eth = dpkt.ethernet.Ethernet(buf)
-    print('Ethernet Frame: ', mac_addr(eth.src), mac_addr(eth.dst), eth.type)
-
-    # Make sure the Ethernet data contains an IP packet
-    if not isinstance(eth.data, dpkt.ip.IP):
-        print('Non IP Packet type not supported %s\n' % eth.data.__class__.__name__)
-        return
-
-    # Now unpack the data within the Ethernet frame (the IP packet)
-    # Pulling out src, dst, length, fragment info, TTL, and Protocol
-    ip = eth.data
-
-    # Pull out fragment information (flags and offset all packed into off field, so use bitmasks)
-    do_not_fragment = bool(ip.off & dpkt.ip.IP_DF)
-    more_fragments = bool(ip.off & dpkt.ip.IP_MF)
-    fragment_offset = ip.off & dpkt.ip.IP_OFFMASK
-
-    # Print out the info
-    print('IP: %s -> %s   (len=%d ttl=%d DF=%d MF=%d offset=%d)\n' % \
-          (inet_to_str(ip.src), inet_to_str(ip.dst), ip.len, ip.ttl, do_not_fragment, more_fragments,
-           fragment_offset))
-
-
-def sec_to_ns(seconds):
-    return int(seconds * 1e+9)
-
-
-def ns_to_sec(nanoseconds):
-    return nanoseconds / 1e+9
-
-
-def get_dataset_local():
-    dataset_name = '../../data/TII-SSRC-23'
-
-    # Path for benign pcap files, recursively search through subdirectories
-    benign_path = os.path.join(dataset_name, 'benign', '**', '*.pcap')
-    benign_files = glob.glob(benign_path, recursive=True)
-
-    # Path for malware pcap files, recursively search through subdirectories
-    malicious_path = os.path.join(dataset_name, 'malicious', '**', '*.pcap')
-    malicious_files = glob.glob(malicious_path, recursive=True)
-
-    return 'TII-SSRC-23', benign_files, malicious_files
-
-
-def get_dataset_debug():
-    dataset_name = 'debug'
-    benign, malware = [], []
-    for path in os.listdir(f'../../data/{dataset_name}/benign/'):
-        cr_path = path.replace('.pcap', '')
-        benign.append(f'benign/{cr_path}')
-
-    for path in os.listdir(f'../../data/{dataset_name}/malicious/'):
-        cr_path = path.replace('.pcap', '')
-        malware.append(f'malicious/{cr_path}')
-    return dataset_name, benign, malware
-
-
-def get_dataset_comms():
-    dataset_name = 'CommsDataset_Adapted'
-    benign, malware = [], []
-    for path in os.listdir(f'../../Datasets/{dataset_name}/Benign/'):
-        cr_path = path.replace('.pcap', '')
-        benign.append(f'Benign/{cr_path}')
-
-    for path in os.listdir(f'../../Datasets/{dataset_name}/Malware/'):
-        cr_path = path.replace('.pcap', '')
-        malware.append(f'Malware/{cr_path}')
-
-    return dataset_name, benign, malware
-
-
-def get_dataset_ustc():
-    dataset_name = 'USTC-TFC2016'
-    # benign = ['Benign/BitTorrent', 'Benign/Facetime', 'Benign/FTP', 'Benign/Gmail', 'Benign/MySQL',
-    #          'Benign/Outlook', 'Benign/Skype', 'Benign/WorldOfWarcraft']
-    malware = ['Malware/Cridex', 'Malware/Geodo', 'Malware/Htbot', 'Malware/Miuref', 'Malware/Neris',
-               'Malware/Nsis-ay', 'Malware/Shifu', 'Malware/Tinba', 'Malware/Virut', 'Malware/Zeus']
-    return dataset_name, malware
-
-
-def numpy_folder_to_tensor(path):
-    trainImages = []
-    for i in os.listdir(path):
-        data = np.load(path + i)
-        trainImages.append(data)

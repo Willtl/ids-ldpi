@@ -4,8 +4,8 @@ import time
 from typing import List, Optional, Tuple, Dict
 
 import dpkt
-import netifaces as ni
-import pcap
+# import netifaces as ni
+# import pcap
 from tqdm import tqdm
 
 from options import SnifferOptions
@@ -22,17 +22,24 @@ protocol_classes = {
 
 
 class Sniffer(ModuleInterface):
-    """
-    A network packet sniffer that captures and processes packets on a specified network interface.
+    """A network sniffer module for capturing and processing network packets.
+
+    Attributes:
+        args (SnifferOptions): Configuration options for the sniffer.
+        timeout_ns (int): Timeout for flows in nanoseconds.
+        flows_tcp (Dict[FlowKeyType, int]): Dictionary for tracking TCP flows.
+        flows_udp (Dict[FlowKeyType, int]): Dictionary for tracking UDP flows.
+        local_ip (Optional[str]): Local IP address of the interface.
+        subscribers (List[SnifferSubscriber]): List of subscribers for packet events.
+        fragments_cache (dict): Cache for handling IP fragments.
+        thread (threading.Thread): Thread for running the sniffing process.
+
+    Args:
+        args (SnifferOptions): Configuration options passed during initialization.
     """
 
     def __init__(self, args: SnifferOptions):
-        """
-        Initializes the Sniffer with given options.
 
-        Args:
-            args (SnifferOptions): Configuration options for the sniffer.
-        """
         super(Sniffer, self).__init__()
         self.args: SnifferOptions = args
         self.timeout_ns: int = sec_to_ns(self.args.timeout)
@@ -46,11 +53,10 @@ class Sniffer(ModuleInterface):
         self.thread = threading.Thread(target=self.sniff)
 
     def run(self, daemon: bool = True) -> None:
-        """
-        Starts the sniffer in a separate thread.
+        """Starts the sniffer in a separate thread and starts the subscribers.
 
         Args:
-            daemon (bool): If True, the thread runs as a daemon.
+            daemon (bool): Whether to run the thread as a daemon. Defaults to True.
         """
         self.thread.daemon = daemon
         self.thread.start()
@@ -58,9 +64,7 @@ class Sniffer(ModuleInterface):
 
     # @abstractmethod
     def sniff(self) -> None:
-        """
-        Captures and processes packets from the network interface.
-        """
+        """Core sniffing method that captures packets and processes them."""
         self.local_ip = ni.ifaddresses(self.args.interface)[ni.AF_INET][0]['addr']
         sniffer = pcap.pcap(name=self.args.interface, promisc=False, immediate=True, timestamp_in_ns=True)
         sniffer.setfilter(f'not ether broadcast and src not {self.local_ip}')
@@ -74,13 +78,12 @@ class Sniffer(ModuleInterface):
             self.process_packet(ts, buf)
 
     def process_packet(self, ts: int, buf: bytes, index: Optional[int] = -1) -> None:
-        """
-        Processes a single packet captured by the sniffer.
+        """Processes each captured packet.
 
         Args:
-            ts (int): Timestamp of the packet.
-            buf (bytes): The packet data.
-            index (Optional[int]): Index of the packet in a pcap file, if applicable.
+            ts (int): Timestamp of the packet capture.
+            buf (bytes): The raw packet data.
+            index (Optional[int]): Index of the packet in the capture file. Defaults to -1.
         """
         try:
             eth = dpkt.ethernet.Ethernet(buf)
@@ -98,12 +101,11 @@ class Sniffer(ModuleInterface):
             logging.warning(f'Packet {index} in PCAP file is truncated')
 
     def unpack_ip(self, eth: dpkt.ethernet.Ethernet, timestamp) -> None:
-        """
-        Unpacks and processes the IP layer of a captured packet.
+        """Unpacks IP packets and handles different protocols.
 
         Args:
-            eth (dpkt.ethernet.Ethernet): The Ethernet frame containing the IP packet.
-            timestamp: The timestamp of the packet.
+            eth (dpkt.ethernet.Ethernet): Ethernet frame containing the IP packet.
+            timestamp: Timestamp associated with the packet.
         """
         ip: Optional[dpkt.ip.IP, dpkt.ip6.IP6] = eth.data
 
@@ -163,15 +165,14 @@ class Sniffer(ModuleInterface):
         self.report_packet(flow_id, protocol, timestamp, ip)
 
     def handle_ipv4_fragments(self, ip: dpkt.ip.IP, timestamp) -> Optional[dpkt.ip.IP]:
-        """
-        Handles fragmented IPv4 packets and attempts to reassemble them.
+        """Handles reassembling IPv4 fragmented packets.
 
         Args:
-            ip (dpkt.ip.IP): The IPv4 packet that might be fragmented.
-            timestamp: The timestamp of the packet.
+            ip (dpkt.ip.IP): The fragmented IP packet.
+            timestamp: Timestamp associated with the packet.
 
         Returns:
-            Optional[dpkt.ip.IP]: The reassembled IP packet or None if reassembly is not yet possible.
+            Optional[dpkt.ip.IP]: Reassembled IP packet or None if incomplete.
         """
         # Check if the packet is fragmented
         is_fragmented = (ip.off & (dpkt.ip.IP_MF | dpkt.ip.IP_OFFMASK)) != 0
@@ -260,14 +261,13 @@ class Sniffer(ModuleInterface):
         return None
 
     def add_subscriber(self, subscriber: SnifferSubscriber) -> bool:
-        """
-        Adds a new subscriber to receive notifications about captured packets.
+        """Adds a new subscriber to the list of subscribers.
 
         Args:
-            subscriber (SnifferSubscriber): The subscriber to add.
+            subscriber (SnifferSubscriber): The subscriber to be added.
 
         Returns:
-            bool: True if the subscriber was added successfully.
+            bool: True if the subscriber is successfully added.
         """
         assert issubclass(
             type(subscriber), SnifferSubscriber
@@ -276,45 +276,45 @@ class Sniffer(ModuleInterface):
         return True
 
     def start_subscribers(self) -> None:
-        """
-        Starts all added subscribers.
-        """
+        """Starts all registered subscribers."""
         for subscriber in self.subscribers:
             subscriber.start()
 
     def report_packet(self, flow_key: FlowKeyType, protocol: int, timestamp: int, ip: dpkt.ip.IP) -> None:
-        """
-        Reports a captured packet to all subscribers.
+        """Reports a new packet to all subscribers.
 
         Args:
-            flow_key (FlowKeyType): The flow key of the packet.
+            flow_key (FlowKeyType): The flow key associated with the packet.
             protocol (int): The protocol number of the packet.
-            timestamp (int): The timestamp of the packet.
-            ip (dpkt.ip.IP): The IP layer of the packet.
+            timestamp (int): Timestamp of the packet.
+            ip (dpkt.ip.IP): The IP packet.
         """
         for subscriber in self.subscribers:
             subscriber.new_packet(flow_key, protocol, timestamp, ip)
 
     def report_teardown(self, flow_key: FlowKeyType, protocol: int) -> None:
-        """
-        Reports the teardown of a flow to all subscribers.
+        """Reports the teardown of a flow to all subscribers.
 
         Args:
-            flow_key (FlowKeyType): The flow key of the packet.
-            protocol (int): The protocol number of the packet.
+            flow_key (FlowKeyType): The flow key associated with the flow.
+            protocol (int): The protocol number of the flow.
         """
         for subscriber in self.subscribers:
             subscriber.teardown(flow_key, protocol)
 
 
 class SnifferPcap(Sniffer):
-    """
-    An extension of the Sniffer class to handle pcap files.
+    """A sniffer subclass for handling pcap files.
+
+    Attributes:
+        _current_pcap_path (str): Path to the current pcap file being processed.
+
+    Args:
+        args (SnifferOptions): Configuration options passed during initialization.
     """
 
     def __init__(self, args: SnifferOptions):
-        """
-        Initializes the SnifferPcap with given options.
+        """Initializes the SnifferPcap with given arguments.
 
         Args:
             args (SnifferOptions): Configuration options for the sniffer.
@@ -322,21 +322,19 @@ class SnifferPcap(Sniffer):
         super(SnifferPcap, self).__init__(args)
         self._current_pcap_path: str = ''
 
-    def set_pcap_path(self, path: str):
-        """
-        Sets the path of the pcap file to be processed.
+    def set_pcap_path(self, path: str) -> None:
+        """Sets the path of the pcap file to be processed.
 
         Args:
-            path (str): The path to the pcap file.
+            path (str): The path of the pcap file.
         """
         self._current_pcap_path = path
 
     def sniff(self, show_tqdm: bool = True) -> None:
-        """
-        Processes packets from a pcap file.
+        """Processes packets from a pcap file.
 
         Args:
-            show_tqdm (bool): If True, displays a progress bar during processing.
+            show_tqdm (bool): Whether to show progress with tqdm. Defaults to True.
         """
         self.flows_tcp: dict = {}
         self.flows_udp: dict = {}
@@ -364,10 +362,3 @@ class SnifferPcap(Sniffer):
                 # Process each packet
                 ts_ns = sec_to_ns(ts)
                 self.process_packet(ts_ns, buf)
-
-    def finalize(self):
-        """
-        Finalizes the processing of the pcap file.
-        """
-        for subscriber in self.subscribers:
-            subscriber.finalize_features(self._current_pcap_path)

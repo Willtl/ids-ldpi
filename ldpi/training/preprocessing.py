@@ -14,22 +14,24 @@ from sniffer.sniffer import Sniffer
 from utils import SnifferSubscriber, sec_to_ns
 
 
-class SnifferPcap(Sniffer):
+class PreprocessingSnifferPcap(Sniffer):
     """
-    SnifferPcap extends the Sniffer class to sniff packets from pcap files and processes them.
+    A subclass of Sniffer that preprocesses and sniffs packets from pcap files.
+    It supports handling multiple pcap files and applies preprocessing logic to each packet.
 
     Attributes:
-        current_pcap_path: The file path of the current pcap file being processed.
-        subscribers: A list of subscribers that will process the sniffed packets.
-        max_samples_per_pcap: The maximum number of samples to process per pcap file.
+        args (SnifferOptions): Configuration options for the sniffer.
+        current_pcap_path (str): The current path of the pcap file being processed.
+        subscribers (List[LDPIPreProcessing]): List of subscribers to notify about pcap processing.
+        max_samples_per_pcap (int): Maximum number of samples to process per pcap file.
     """
 
     def __init__(self, args: SnifferOptions) -> None:
         """
-        Initializes the SnifferPcap instance with the given SnifferOptions.
+        Initialize the PreprocessingSnifferPcap with given arguments.
 
-        Parameters:
-            args: Configuration options for the sniffer.
+        Args:
+            args (SnifferOptions): Configuration options for the sniffer.
         """
         super().__init__(args)
         self.current_pcap_path: str = ''
@@ -38,10 +40,8 @@ class SnifferPcap(Sniffer):
 
     def sniff(self) -> None:
         """
-        Sniffs packets from a pcap file and processes them.
-
-        Raises:
-            ValueError: If subscribers list is empty.
+        Start the sniffing process, which involves processing pcap files from specified directories.
+        Raises ValueError if subscribers list is empty.
         """
         if not self.subscribers:
             raise ValueError("Subscribers list cannot be empty.")
@@ -53,17 +53,13 @@ class SnifferPcap(Sniffer):
             self._set_current_pcap_path(pcap_path)
             self._process_pcap_file(pcap_path)
 
-    def _get_dataset_info(self) -> tuple:
+    def _get_dataset_info(self) -> Tuple[str, List[str], List[str]]:
         """
-        Retrieves dataset information.
+        Retrieves dataset information including the name and paths of benign and malicious pcap files.
 
         Returns:
-            A tuple containing the dataset name, list of benign pcap paths, and list of malware pcap paths.
-
-        Raises:
-            FileNotFoundError: If no pcap files are found in the specified dataset directories.
+            Tuple[str, List[str], List[str]]: Dataset name, list of benign pcap file paths, list of malicious pcap file paths.
         """
-
         # Resolve the relative path to an absolute path
         dataset_name = os.path.abspath(self.args.dataset_path)
 
@@ -87,10 +83,10 @@ class SnifferPcap(Sniffer):
 
     def _set_current_pcap_path(self, pcap_path: str) -> None:
         """
-        Sets the current pcap path based on the directory name and pcap filename.
+        Sets the current pcap path based on the provided pcap file path.
 
-        Parameters:
-            pcap_path: The path to the pcap file.
+        Args:
+            pcap_path (str): The path to the current pcap file.
         """
         dir_only = os.path.dirname(pcap_path)
         if 'TII-SSRC-23' in dir_only:
@@ -102,10 +98,10 @@ class SnifferPcap(Sniffer):
 
     def _process_pcap_file(self, pcap_path: str) -> None:
         """
-        Processes the pcap file and pre-processes the packets.
+        Processes a single pcap file.
 
-        Parameters:
-            pcap_path: The path to the pcap file.
+        Args:
+            pcap_path (str): The path to the pcap file to be processed.
         """
         self.flows_tcp.clear()
         self.flows_udp.clear()
@@ -124,10 +120,10 @@ class SnifferPcap(Sniffer):
 
     def _handle_subscriber_processing(self) -> int:
         """
-        Handles the processing of packets by the subscriber.
+        Handles the processing logic for subscribers.
 
         Returns:
-            The number of processed flows.
+            int: The current sample counter after processing.
         """
         subscriber = self.subscribers[0]
         if not subscriber.to_process.empty():
@@ -137,7 +133,12 @@ class SnifferPcap(Sniffer):
 
 
 class LDPIPreProcessing(SnifferSubscriber):
+    """ LDPI preprocessing routines """
+
     def __init__(self) -> None:
+        """
+        Initialize the LDPIPreProcessing instance with default values.
+        """
         super(LDPIPreProcessing, self).__init__()
         self.args = LDPIOptions()
         self.flows_tcp: Dict[Tuple[bytes, int, bytes, int], List[bytes]] = {}
@@ -149,17 +150,20 @@ class LDPIPreProcessing(SnifferSubscriber):
         self.current_path: str = ""
 
     def run(self) -> None:
+        """
+        Placeholder for the main logic to run the LDPIPreProcessing instance.
+        """
         pass
 
     def new_packet(self, flow_key: Tuple[bytes, int, bytes, int], protocol: int, timestamp: int, ip: dpkt.ip.IP) -> None:
         """
-        Processes a new packet and determines if it should be added to a flow for analysis.
+        Processes a new packet received from the network.
 
-        Parameters:
-            flow_key: The unique identifier of the flow.
-            protocol: The protocol number (e.g., TCP=6, UDP=17).
-            timestamp: The timestamp of the packet.
-            ip: The IP layer of the packet.
+        Args:
+            flow_key (Tuple[bytes, int, bytes, int]): Unique key identifying the network flow.
+            protocol (int): Protocol number (e.g., 6 for TCP).
+            timestamp (int): Timestamp of the packet.
+            ip (dpkt.ip.IP): IP packet to be processed.
         """
         flows, checked_flows = self.get_buffers(protocol)
 
@@ -191,7 +195,14 @@ class LDPIPreProcessing(SnifferSubscriber):
             del flows[flow_key]
 
     # Remove flows entries in case of teardown
-    def teardown(self, flow_key: tuple, protocol: int) -> None:
+    def teardown(self, flow_key: Tuple[bytes, int, bytes, int], protocol: int) -> None:
+        """
+        Handles the teardown of a network flow, removing it from active monitoring.
+
+        Args:
+            flow_key (Tuple[bytes, int, bytes, int]): Unique key identifying the network flow.
+            protocol (int): Protocol number (e.g., 6 for TCP).
+        """
         # Buffer of flows and checked flows of given protocol
         flows, checked_flows = self.get_buffers(protocol)
         removed_flows = flows.pop(flow_key, False)
@@ -201,6 +212,12 @@ class LDPIPreProcessing(SnifferSubscriber):
         #     print(Color.UNDERLINE + f'{str_key} teardown ({self.to_process.qsize()})' + Color.ENDC)
 
     def preprocess_samples(self) -> np.ndarray:
+        """
+        Preprocesses the collected samples, preparing them for analysis or storage.
+
+        Returns:
+            np.ndarray: An array of preprocessed samples.
+        """
         # Dequeue all samples for this iteration
         samples = []
         while not self.to_process.empty():
@@ -234,7 +251,17 @@ class LDPIPreProcessing(SnifferSubscriber):
             self.sample_counter += 1
             # print(norm_flows[i].shape)
 
-    def perf_measure(self, y_true, scores) -> float:
+    def perf_measure(self, y_true: np.ndarray, scores: np.ndarray) -> float:
+        """
+        Measures the performance of a model using the true labels and the model's scores.
+
+        Args:
+            y_true (np.ndarray): Array of true labels.
+            scores (np.ndarray): Array of scores from the model.
+
+        Returns:
+            float: The accuracy of the model.
+        """
         y_pred = np.empty_like(y_true)
         for i in range(len(y_true)):
             if scores[i] < self.threshold:
@@ -246,11 +273,25 @@ class LDPIPreProcessing(SnifferSubscriber):
         accuracy = accuracy_score(y_true, y_pred)
         return accuracy
 
-    def get_buffers(self, protocol: int) -> tuple:
-        """ Return the correct buffers """
+    def get_buffers(self, protocol: int) -> Tuple[Dict, Dict]:
+        """
+        Returns the appropriate buffers for the specified protocol.
+
+        Args:
+            protocol (int): Protocol number (e.g., 6 for TCP).
+
+        Returns:
+            Tuple[Dict, Dict]: The flows and checked flows dictionaries for the specified protocol.
+        """
         return (self.flows_tcp, self.c_tcp) if protocol == 6 else (self.flows_udp, self.c_udp)
 
-    def set_current_path(self, storing_path: str):
+    def set_current_path(self, storing_path: str) -> None:
+        """
+        Sets the current path for storing processed data and resets internal data structures.
+
+        Args:
+            storing_path (str): The path for storing data.
+        """
         self.flows_tcp: Dict[tuple, int] = {}
         self.flows_udp: Dict[tuple, int] = {}
         self.c_tcp: Dict[tuple, int] = {}
@@ -265,13 +306,13 @@ class LDPIPreProcessing(SnifferSubscriber):
 
 def anonymize_packet(ip: dpkt.ip.IP) -> bytes:
     """
-    Anonymizes an IP packet by removing certain bytes.
+    Anonymizes an IP packet by removing sensitive information such as IP addresses.
 
-    Parameters:
-        ip: The IP layer of the packet.
+    Args:
+        ip (dpkt.ip.IP): The IP packet to be anonymized.
 
     Returns:
-        Anonymized bytes of the packet.
+        bytes: The anonymized IP packet.
     """
     ip_bytes = bytes(ip)
 
@@ -285,14 +326,14 @@ def anonymize_packet(ip: dpkt.ip.IP) -> bytes:
 
 def trim_or_pad_packet(packet: bytes, length: int) -> np.ndarray:
     """
-    Trims or pads the packet to the desired length.
+    Trims or pads a packet to a specific length.
 
     Args:
-        packet (bytes): The packet to process.
-        length (int): Desired length of the packet.
+        packet (bytes): The packet to be modified.
+        length (int): The desired length of the packet.
 
     Returns:
-        np.ndarray: The processed packet.
+        np.ndarray: The modified packet.
     """
     # Trim to length in case packet is larger than length
     if len(packet) > length:
@@ -309,7 +350,13 @@ def trim_or_pad_packet(packet: bytes, length: int) -> np.ndarray:
     return np_buff
 
 
-def main():
+def main() -> None:
+    """
+    Main function to initialize and run the preprocessing sniffer for pcap files.
+
+    This function sets up logging based on debug flags, initializes the PreprocessingSnifferPcap
+    with appropriate arguments, and attaches an LDPIPreProcessing instance as a subscriber.
+    """
     # Process PCAP into network flow samples
     sniffer_args = SnifferOptions()
 
@@ -319,7 +366,8 @@ def main():
     else:
         logging.basicConfig(level=logging.INFO)
 
-    fsnf = SnifferPcap(sniffer_args)
+    # Create preprocessing sniffing process and run it with LDPI preprocessing routine
+    fsnf = PreprocessingSnifferPcap(sniffer_args)
     fsnf.subscribers.append(LDPIPreProcessing())
     fsnf.run(daemon=False)
 

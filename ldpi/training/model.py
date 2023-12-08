@@ -5,9 +5,36 @@ from tsai.models.all import ResCNN
 
 
 class ResCNNContrastive(nn.Module):
-    """A module for supervised contrastive learning."""
+    """
+    A contrastive learning model built on the ResCNN architecture.
 
-    def __init__(self, dim_mid=128, feat_dim=128, verbose=True):
+    This class creates a model for contrastive learning using Residual CNNs.
+    It includes methods to initialize the model, create the encoder and head,
+    and perform forward pass operations.
+
+    Attributes:
+        dim_mid (int): Dimensionality of the intermediate layers in the head.
+        feat_dim (int): Dimensionality of the output feature vector.
+        device (torch.device): The device (CPU or GPU) on which the model runs.
+        encoder (nn.Module): The encoder module based on ResCNN.
+        head (nn.Sequential): The head module consisting of linear and activation layers.
+        dim_in (int): Input dimensionality for the head module.
+
+    Methods:
+        forward(x): Computes the forward pass of the model.
+        encode(x): Encodes the input using the model without normalization.
+    """
+
+    def __init__(self, dim_mid: int = 128, feat_dim: int = 128, verbose: bool = True):
+        """
+        Initializes the ResCNNContrastive model.
+
+        Args:
+            dim_mid (int): Intermediate feature dimension in the head. Defaults to 128.
+            feat_dim (int): Feature dimension of the final output. Defaults to 128.
+            verbose (bool): If True, prints model and size information.
+
+        """
         super().__init__()
         self.dim_mid = dim_mid
         self.feat_dim = feat_dim
@@ -24,13 +51,18 @@ class ResCNNContrastive(nn.Module):
             print(f'Model size: {sum([param.nelement() for param in self.parameters()]) / 1000000} (M)')
 
     def _create_encoder(self):
-        """Create an encoder model based on the given name and pretrained option."""
+        """Creates the encoder module based on ResCNN."""
         self.encoder = ResCNN(1, 10, separable=True).to(self.device)
         self.dim_in = self.encoder.lin.in_features
         self.encoder.lin = nn.Identity()
 
     def _create_head(self, depth: int = 4):
-        """Create a head model based on the given head type and dimensions."""
+        """
+        Creates the head module for the model.
+
+        Args:
+            depth (int): Number of layers in the head module.
+        """
         layers = []
         layers.extend([
             nn.Linear(self.dim_in, self.dim_mid, bias=False),
@@ -47,7 +79,9 @@ class ResCNNContrastive(nn.Module):
         self.head = nn.Sequential(*layers)
 
     def _initialize_weights(self):
-        """Initialize encoder and head weights randomly."""
+        """
+        Initializes weights of the model using He and Glorot initialization.
+        """
         # Apply He (Kaiming) initialization to the encoder layers
         for layer in self.encoder.modules():
             if isinstance(layer, (nn.Conv2d, nn.Linear)):
@@ -68,14 +102,30 @@ class ResCNNContrastive(nn.Module):
                 nn.init.constant_(layer.weight, 1)
                 nn.init.constant_(layer.bias, 0)
 
-    def forward(self, x):
-        """Compute forward pass."""
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Performs the forward pass of the model.
+
+        Args:
+            x (torch.Tensor): Input tensor.
+
+        Returns:
+            torch.Tensor: Normalized feature vector.
+        """
         feat = self.encoder(x)
         feat = F.normalize(self.head(feat), dim=1)
         return feat
 
-    def encode(self, x):
-        """Compute forward pass."""
+    def encode(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Encodes the input using the model without normalization.
+
+        Args:
+            x (torch.Tensor): Input tensor.
+
+        Returns:
+            torch.Tensor: Feature vector.
+        """
         feat = self.encoder(x)
         feat = self.head(feat)
         return feat

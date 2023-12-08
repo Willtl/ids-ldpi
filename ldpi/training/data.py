@@ -6,11 +6,12 @@ from typing import Tuple
 import numpy as np
 import pandas as pd
 import torch
-from scipy.interpolate import interp1d
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 
-# Type aliases for clarity (compatible with Python 3.8)
+import transforms
+
+# Type aliases
 ArrayFloat = np.ndarray
 ArrayInt = np.ndarray
 DataFrame = pd.DataFrame
@@ -19,102 +20,112 @@ DataLoaderType = DataLoader
 
 class CustomDataset(Dataset):
     """
-        Custom dataset class for handling samples and targets.
+    A custom dataset class for handling samples and targets.
+
+    Attributes:
+        samples (ArrayFloat): A numpy array of samples.
+        targets (ArrayInt): A numpy array of target values.
+        bin_targets (ArrayInt): A numpy array of binary target values.
+        n_samples (int): Number of samples in the dataset.
     """
 
     def __init__(self, samples: ArrayFloat, targets: ArrayInt, bin_targets: ArrayInt):
+        """
+        Initializes the CustomDataset with samples and targets.
+
+        Args:
+            samples (ArrayFloat): A numpy array of samples.
+            targets (ArrayInt): A numpy array of target values.
+            bin_targets (ArrayInt): A numpy array of binary target values.
+        """
         self.samples = samples
         self.targets = targets
         self.bin_targets = bin_targets
         self.n_samples = samples.shape[0]
 
-    def __getitem__(self, index: int) -> Tuple[ArrayFloat, int, int]:
+    def __getitem__(self, index: int) -> Tuple[ArrayFloat, ArrayFloat, ArrayFloat]:
+        """
+        Returns the sample and target values at the specified index.
+
+        Args:
+            index (int): Index of the desired sample.
+
+        Returns:
+            Tuple[ArrayFloat, int, int]: A tuple containing the sample, target, and binary target at the given index.
+        """
         return self.samples[index], self.targets[index], self.bin_targets[index]
 
     def __len__(self) -> int:
+        """
+        Returns the total number of samples in the dataset.
+
+        Returns:
+            int: Total number of samples.
+        """
         return self.n_samples
 
 
 class OneClassContrastiveDataset(Dataset):
     """
-    Custom dataset class for pretraining with one class contrastive.
+    A dataset class for one-class contrastive learning, with synthetic outliers and data augmentation techniques.
+
+    Attributes:
+        samples (ArrayFloat): A numpy array of samples.
+        targets (ArrayInt): A numpy array of target values.
+        bin_targets (ArrayInt): A numpy array of binary target values.
+        n_samples (int): Number of samples in the dataset.
+        outlier_noisy (ArrayFloat): Synthetic outliers with injected random noise.
+        outlier_reversed (ArrayFloat): Synthetic outliers with reversed sequences.
+        outlier_shuffled (ArrayFloat): Synthetic outliers with shuffled sequences.
+        outlier_inverted (ArrayFloat): Synthetic outliers with inverted values.
     """
 
     def __init__(self, samples: np.ndarray, targets: np.ndarray, bin_targets: np.ndarray):
+        """
+        Initializes the OneClassContrastiveDataset with samples, targets, and synthetic outliers.
+
+        Args:
+            samples (np.ndarray): A numpy array of samples.
+            targets (np.ndarray): A numpy array of target values.
+            bin_targets (np.ndarray): A numpy array of binary target values.
+        """
         self.samples = samples
         self.targets = targets
         self.bin_targets = bin_targets
         self.n_samples = samples.shape[0]
 
         # Create fake outliers
-        self.outlier_noisy = self.inject_random_noise(samples)
-        self.outlier_reversed = self.reverse_sequences(samples)
-        self.outlier_shuffled = self.shuffle_sequences(samples)
-        self.outlier_inverted = self.invert_values(samples)
+        self.outlier_noisy = transforms.inject_random_noise(samples)
+        self.outlier_reversed = transforms.reverse_sequences(samples)
+        self.outlier_shuffled = transforms.shuffle_sequences(samples)
+        self.outlier_inverted = transforms.invert_values(samples)
 
-    def inject_random_noise(self, samples, noise_level=0.05):
-        noise = np.random.uniform(-noise_level, noise_level, samples.shape)
-        noisy_samples = np.clip(samples + noise, 0, 1)
-        return noisy_samples
+    def transform(self, sample: ArrayFloat) -> ArrayFloat:
+        """
+        Applies random data augmentation techniques to a sample.
 
-    def reverse_sequences(self, samples):
-        reversed_samples = np.flip(samples, axis=1)
-        return reversed_samples
+        Args:
+            sample (ArrayFloat): A numpy array of a sample.
 
-    def shuffle_sequences(self, samples):
-        shuffled_samples = np.copy(samples)
-        for s in shuffled_samples:
-            np.random.shuffle(s)
-        return shuffled_samples
-
-    def invert_values(self, samples):
-        inverted_samples = 1 - samples
-        return inverted_samples
-
-    def transform(self, sample):
+        Returns:
+            ArrayFloat: Transformed sample.
+        """
         # Randomly select an augmentation to apply
-        augs = [self.temporal_scaling, self.jittering, self.random_segment_permutation]
+        augs = [transforms.temporal_scaling, transforms.jittering, transforms.random_segment_permutation]
         augmented = np.random.choice(augs)(sample)
-        augmented = self.crop_and_resize(augmented)
+        augmented = transforms.crop_and_resize(augmented)
         return augmented
 
-    def crop_and_resize(self, sample):
-        original_length = len(sample)
-        scale = np.random.uniform(0.1, 1.0)
-        crop_size = int(original_length * scale)
-        start = np.random.randint(0, len(sample) - crop_size)
-        cropped_sample = sample[start:start + crop_size]
-        # Linear interpolation to resize back to original sequence length
-        return interp1d(np.linspace(0, crop_size - 1, num=crop_size), cropped_sample, kind='linear', fill_value='extrapolate')(np.arange(original_length))
-
-    def temporal_scaling(self, sample):
-        original_length = len(sample)
-        scale = np.random.uniform(0.8, 1.2)  # Adjust scaling factors as needed
-        scaled_length = int(original_length * scale)
-        indices = np.linspace(0, original_length - 1, num=scaled_length)
-        scaled_sample = interp1d(np.arange(original_length), sample, kind='linear')(indices)
-
-        # Adjust the length to match the original length
-        if scaled_length < original_length:
-            # Extend the sequence to the original length
-            additional_indices = np.linspace(scaled_length, original_length - 1, num=original_length - scaled_length)
-            extended_sample = interp1d(np.arange(scaled_length), scaled_sample, kind='linear', fill_value='extrapolate')(additional_indices)
-            return np.concatenate([scaled_sample, extended_sample])
-        else:
-            # Trim the sequence to the original length
-            return scaled_sample[:original_length]
-
-    def jittering(self, sample, noise_level=0.02):
-        noise = np.random.normal(0, noise_level, len(sample))
-        return np.clip(sample + noise, 0, 1)
-
-    def random_segment_permutation(self, sample, num_segments=5):
-        segment_length = len(sample) // num_segments
-        segments = [sample[i * segment_length:(i + 1) * segment_length] for i in range(num_segments)]
-        np.random.shuffle(segments)
-        return np.concatenate(segments)
-
     def __getitem__(self, index: int) -> Tuple:
+        """
+        Returns a pair of views (two transformed sample) for contrastive learning.
+
+        Args:
+            index (int): Index of the desired sample pair.
+
+        Returns:
+            Tuple: A tuple containing two transformed samples.
+        """
         if random.random() < 0.5:
             sample = self.samples[index]
         else:
@@ -125,12 +136,24 @@ class OneClassContrastiveDataset(Dataset):
         return v1, v2
 
     def __len__(self) -> int:
+        """
+        Returns the total number of samples in the dataset.
+
+        Returns:
+            int: Total number of samples.
+        """
         return self.n_samples
 
 
 def make_weights_for_balanced_classes(targets: ArrayInt) -> List[float]:
     """
-        Create weights for balanced class sampling.
+    Calculates weights for balanced classes based on target values.
+
+    Args:
+        targets (ArrayInt): A numpy array of target values.
+
+    Returns:
+        List[float]: A list of weights for each class to balance the classes.
     """
     count = {1: 0, -1: 0}
     for item in targets:
@@ -145,15 +168,15 @@ def make_weights_for_balanced_classes(targets: ArrayInt) -> List[float]:
 
 def load_data_from_folder(dataset_name: str, category: str, counter: int) -> Tuple[int, List[ArrayFloat], List[ArrayInt]]:
     """
-    Load data from subdirectories in a folder, normalizing and structuring it.
+    Load data from a folder based on dataset name and category.
 
     Args:
-        dataset_name (str): Name of the dataset directory.
-        category (str): Category to load ('benign' or 'malicious').
-        counter (int): Starting label counter.
+        dataset_name (str): Name of the dataset.
+        category (str): Category of data ('benign' or 'malicious').
+        counter (int): Counter to track label values.
 
     Returns:
-        Tuple[int, List[ArrayFloat], List[ArrayInt]]: Updated label counter, list of loaded samples, and corresponding targets.
+        Tuple[int, List[ArrayFloat], List[ArrayInt]]: Updated counter, list of samples, and list of labels.
     """
     samples: List[ArrayFloat] = []
     targets: List[ArrayInt] = []
@@ -189,18 +212,16 @@ def load_data_from_folder(dataset_name: str, category: str, counter: int) -> Tup
 
 def load_data(dataset: str, test_size: float = 0.20, only_normal: bool = False) -> Tuple[ArrayFloat, ArrayInt, ArrayInt, ArrayFloat, ArrayInt, ArrayInt]:
     """
-    Load and split data into training and testing sets.
+    Load data for training and testing.
 
     Args:
-        dataset (str): The dataset name.
-        test_size (float, optional): The proportion of the dataset to include in the test split. Defaults to 0.20.
-        only_normal (bool, optional): If True, only load normal data. Defaults to False.
+        dataset (str): Name of the dataset.
+        test_size (float, optional): Size of the test set as a proportion of the dataset. Defaults to 0.20.
+        only_normal (bool, optional): Whether to load only normal data. Defaults to False.
 
     Returns:
-        Tuple[ArrayFloat, ArrayInt, ArrayInt, ArrayFloat, ArrayInt, ArrayInt]: Train samples, train targets, train binary targets,
-        test samples, test targets, test binary targets.
+        Tuple[ArrayFloat, ArrayInt, ArrayInt, ArrayFloat, ArrayInt, ArrayInt]: Training and testing data and labels.
     """
-
     # Assuming load_data_from_folder is a function that loads the data
     # Replace with the actual data loading logic as necessary
     label_counter, benign_data, benign_labels = load_data_from_folder(dataset, 'benign', counter=0)
@@ -245,14 +266,14 @@ def load_data(dataset: str, test_size: float = 0.20, only_normal: bool = False) 
 
 def get_training_dataloader(dataset: str, batch_size: int = 64) -> Tuple[DataLoaderType, DataLoaderType]:
     """
-    Prepare DataLoader for training and testing datasets.
+    Get training and testing data loaders for the specified dataset.
 
     Args:
-        dataset (Callable): A function to load and return dataset.
-        batch_size (int, optional): Batch size for DataLoader. Defaults to 64.
+        dataset (str): Name of the dataset.
+        batch_size (int, optional): Batch size for training. Defaults to 64.
 
     Returns:
-        Tuple containing test samples, test targets, training DataLoader, and testing DataLoader.
+        Tuple[DataLoaderType, DataLoaderType]: Training and testing data loaders.
     """
     train_samples, train_targets, train_bin_targets, test_samples, test_targets, test_bin_targets = load_data(dataset, only_normal=False)
     print(f'{train_samples.shape[0]} training samples')
@@ -272,14 +293,17 @@ def get_training_dataloader(dataset: str, batch_size: int = 64) -> Tuple[DataLoa
 
 def get_pretrain_dataloader(dataset: str, batch_size: int, contrastive: bool = False, shuffle: bool = True, drop_last: bool = True) -> DataLoaderType:
     """
-        Prepare DataLoader for pretraining with normal samples only.
+    Get a pretraining data loader for the specified dataset.
 
     Args:
-        dataset (Callable): A function to load and return dataset.
-        batch_size (int, optional): Batch size for DataLoader. Defaults to 64.
-        contrastive (bool): Dataloader for contrastive learning.
+        dataset (str): Name of the dataset.
+        batch_size (int): Batch size for pretraining.
+        contrastive (bool, optional): Whether to use contrastive data augmentation. Defaults to False.
+        shuffle (bool, optional): Whether to shuffle the data. Defaults to True.
+        drop_last (bool, optional): Whether to drop the last batch if it's smaller than batch_size. Defaults to True.
+
     Returns:
-        DataLoader for pretraining.
+        DataLoaderType: Pretraining data loader.
     """
     train_samples, train_targets, train_bin_targets, _, _, _ = load_data(dataset, test_size=0.0, only_normal=True)
     print(f'Pretraining with {train_samples.shape[0]} normal samples')

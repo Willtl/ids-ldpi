@@ -14,39 +14,32 @@ from utils import FlowKeyType, SnifferSubscriber, Color, flow_key_to_str
 
 class TrainedModel:
     """
-        This class encapsulates a trained model for light deep packet inspection.
+    A class representing a trained machine learning model for anomaly detection in network flows.
 
-        Attributes:
-            args (LDPIOptions): The options for the LDPI model.
-            store_models_path (str): Path to store the models.
-            quantized (bool): Flag to indicate if the model is quantized.
-            backend (str): The backend used for quantization.
-            batch_size (int): Size of the batch for processing.
-            model (Optional[torch.jit.ScriptModule]): The trained PyTorch model.
-            center (Optional[torch.Tensor]): The center tensor used in anomaly detection.
-            ninety_nine_threshold (Optional[float]): Threshold for 99% confidence.
-            near_max_threshold (Optional[float]): Threshold for near maximum confidence.
-            max_threshold (Optional[float]): Threshold for maximum confidence.
-            hundred_one_threshold (Optional[float]): Threshold for 101% confidence.
-            chosen_threshold (float): The chosen threshold for anomaly detection.
-
-        Methods:
-            _init_model: Initializes the trained model.
-            _initialize_threshold: Initializes the threshold for anomaly detection.
-            prepare_tensors: Prepares tensors for inference.
-            infer: Performs inference on network flows.
-        """
+    Attributes:
+        args (LDPIOptions): Configuration options for the model.
+        quantized (bool): Indicates if the model is quantized.
+        backend (str): The backend used for quantization.
+        batch_size (int): The size of batches for processing.
+        model (Optional[torch.jit.ScriptModule]): The trained PyTorch model.
+        center (Optional[torch.Tensor]): The center tensor used in anomaly detection.
+        ninety_nine_threshold (Optional[float]): Threshold for 99% anomaly detection.
+        near_max_threshold (Optional[float]): Threshold for near-maximum anomaly detection.
+        max_threshold (Optional[float]): Maximum threshold for anomaly detection.
+        hundred_one_threshold (Optional[float]): Threshold for 101% anomaly detection.
+        chosen_threshold (float): The chosen threshold based on args.
+        store_models_path (str): Path to store the models.
+    """
 
     def __init__(self, args: LDPIOptions, quantized: bool = False, backend: str = 'qnnpack', batch_size: int = 32):
         """
-        Initialize the TrainedModel instance.
+        Initializes the TrainedModel with specified arguments.
 
         Args:
-            args (LDPIOptions): The options for the LDPI model.
+            args (LDPIOptions): Configuration options for the model.
             quantized (bool): If the model is quantized.
-            backend (str): The backend used for quantization.
-            store_models_path (str): Path to store the models.
-            batch_size (int): Size of the batch for processing.
+            backend (str): Backend used for quantization.
+            batch_size (int): Batch size for processing.
         """
         self.args: LDPIOptions = args
 
@@ -68,7 +61,10 @@ class TrainedModel:
 
     def _init_model(self) -> None:
         """
-        Initializes the model from the saved state. Loads the model, thresholds, and center.
+        Initializes the model by loading the pre-trained model and associated data.
+
+        Raises:
+            Exception: If there is an error in loading the model.
         """
         try:
             print('Loading best model and center from saved state')
@@ -101,10 +97,13 @@ class TrainedModel:
 
     def _initialize_threshold(self) -> float:
         """
-        Initializes the chosen threshold based on the specified threshold type in the arguments.
+        Initializes the threshold based on the configuration args.
 
         Returns:
-            float: The chosen threshold value.
+            float: The initialized threshold value.
+
+        Raises:
+            ValueError: If an invalid threshold_type is provided in args.
         """
         if self.args.threshold_type == 'ninety_nine':
             return self.ninety_nine_threshold
@@ -119,14 +118,14 @@ class TrainedModel:
 
     def prepare_tensors(self, to_process: List[Tuple[FlowKeyType, List[np.ndarray]]], black_list: Set[bytes]) -> Tuple[List[FlowKeyType], torch.Tensor]:
         """
-        Prepares tensors for inference from the to_process list and black_list.
+        Prepares tensors from the network flows for model inference.
 
         Args:
-            to_process (List[Tuple[FlowKeyType, List[np.ndarray]]]): The list of flows to process.
+            to_process (List[Tuple[FlowKeyType, List[np.ndarray]]]): List of tuples containing flow keys and corresponding numpy arrays.
             black_list (Set[bytes]): Set of blacklisted source IPs.
 
         Returns:
-            Tuple[List[FlowKeyType], torch.Tensor]: Tuple of flow keys and the corresponding tensor for inference.
+            Tuple[List[FlowKeyType], torch.Tensor]: Tuple containing flow keys and a tensor of processed samples.
         """
         keys, samples = [], []
 
@@ -159,13 +158,13 @@ class TrainedModel:
 
     def infer(self, network_flows: torch.Tensor) -> torch.Tensor:
         """
-        Performs inference on the given network flows.
+        Performs inference on the network flows to detect anomalies.
 
         Args:
-            network_flows (torch.Tensor): The network flows tensor for inference.
+            network_flows (torch.Tensor): Tensor of network flows to be analyzed.
 
         Returns:
-            torch.Tensor: Tensor indicating if each flow is an anomaly.
+            torch.Tensor: Tensor indicating whether each flow is an anomaly.
         """
         # Add an extra dimension to the network_flows tensor for processing
         network_flows = network_flows.unsqueeze(1)
@@ -184,32 +183,25 @@ class TrainedModel:
 
 class LightDeepPacketInspection(SnifferSubscriber):
     """
-        Implements light deep packet inspection using a trained model.
+    Class representing the Light Deep Packet Inspection (LDPI) system. It subscribes to
+    a network sniffer, processes network flows, and uses a trained model to detect anomalies.
 
-        Inherits from SnifferSubscriber and performs analysis of network flows
-        to detect anomalies using deep packet inspection techniques.
-
-        Attributes:
-            args (LDPIOptions): Configuration options for LDPI.
-            trained_model (TrainedModel): A trained model for packet inspection.
-            flows_tcp (Dict[FlowKeyType, List[np.ndarray]]): Buffer for TCP flows.
-            flows_udp (Dict[FlowKeyType, List[np.ndarray]]): Buffer for UDP flows.
-            checked_tcp (Set[FlowKeyType]): Set of checked TCP flow keys.
-            checked_udp (Set[FlowKeyType]): Set of checked UDP flow keys.
-            black_list (Set[bytes]): Set of blacklisted source IPs.
-            to_process (List[Tuple[FlowKeyType, List[np.ndarray]]]): Flows queued for processing.
-            thread (threading.Thread): Thread for analyzing flows.
-
-        Methods:
-            run: Starts the analysis thread.
-            analyze_flows: Analyzes network flows in a separate thread.
-            _black_list_flows: Blacklists flows based on anomaly detection results.
-            new_packet: Handles new packets for flow processing.
-            teardown: Cleans up flow entries.
-            get_buffers: Returns the appropriate buffers based on the protocol.
-        """
+    Attributes:
+        args (LDPIOptions): Configuration options for the LDPI system.
+        trained_model (TrainedModel): The trained anomaly detection model.
+        flows_tcp (Dict[FlowKeyType, List[np.ndarray]]): Dictionary for TCP flows.
+        flows_udp (Dict[FlowKeyType, List[np.ndarray]]): Dictionary for UDP flows.
+        checked_tcp (Set[FlowKeyType]): Set of checked TCP flow keys.
+        checked_udp (Set[FlowKeyType]): Set of checked UDP flow keys.
+        black_list (Set[bytes]): Set of blacklisted source IPs.
+        to_process (List[Tuple[FlowKeyType, List[np.ndarray]]]): List of flows queued for processing.
+        thread (threading.Thread): The thread running the analyze_flows method.
+    """
 
     def __init__(self) -> None:
+        """
+        Initializes the LightDeepPacketInspection instance.
+        """
         super(LightDeepPacketInspection, self).__init__()
 
         # Initialize LDPIOptions
@@ -232,11 +224,15 @@ class LightDeepPacketInspection(SnifferSubscriber):
         self.thread.daemon = True
 
     def run(self) -> None:
-        """Starts the analysis thread."""
+        """
+        Starts the threading process for analyzing network flows.
+        """
         self.thread.start()
 
     def analyze_flows(self):
-        """Analyzes network flows in a separate thread."""
+        """
+        Analyzes network flows for anomalies using the trained model.
+        """
         while not self.stopped():
             keys, samples = self.trained_model.prepare_tensors(self.to_process, self.black_list)
             if keys:
@@ -250,11 +246,11 @@ class LightDeepPacketInspection(SnifferSubscriber):
 
     def _black_list_flows(self, keys: List[FlowKeyType], anomalies: torch.Tensor) -> None:
         """
-        Blacklists flows based on anomaly detection results.
+        Updates the blacklist based on the anomaly detection results.
 
         Args:
             keys (List[FlowKeyType]): List of flow keys.
-            anomalies (torch.Tensor): Tensor indicating anomalies.
+            anomalies (torch.Tensor): Tensor indicating whether each flow is an anomaly.
         """
         # Process each key and corresponding anomaly detection result
         for key, is_anomaly in zip(keys, anomalies):
@@ -267,13 +263,13 @@ class LightDeepPacketInspection(SnifferSubscriber):
 
     def new_packet(self, flow_key: FlowKeyType, protocol: int, timestamp: int, ip: dpkt.ip.IP) -> None:
         """
-        Handles new packets for flow processing.
+        Processes new packets by appending them to the corresponding flows.
 
         Args:
-            flow_key (FlowKeyType): The flow key.
-            protocol (int): Protocol number (TCP/UDP).
-            timestamp (int): Packet timestamp.
-            ip (dpkt.ip.IP): IP packet.
+            flow_key (FlowKeyType): The key of the flow.
+            protocol (int): The protocol of the packet.
+            timestamp (int): The timestamp of the packet.
+            ip (dpkt.ip.IP): The IP packet.
         """
         # Drop all packets in case src_ip is on black list
         if flow_key[0] in self.black_list:
@@ -318,11 +314,11 @@ class LightDeepPacketInspection(SnifferSubscriber):
     # Remove flows entries in case of teardown
     def teardown(self, flow_key: FlowKeyType, protocol: int) -> None:
         """
-        Cleans up flow entries.
+        Removes a flow from processing in case of a teardown.
 
         Args:
-            flow_key (FlowKeyType): The flow key.
-            protocol (int): Protocol number (TCP/UDP).
+            flow_key (FlowKeyType): The key of the flow to be removed.
+            protocol (int): The protocol of the flow.
         """
         # Determine the appropriate buffers based on the protocol
         flows, checked_flows = self.get_buffers(protocol)
@@ -336,13 +332,13 @@ class LightDeepPacketInspection(SnifferSubscriber):
 
     def get_buffers(self, protocol: int) -> Tuple[Dict[FlowKeyType, List[np.ndarray]], Set[FlowKeyType]]:
         """
-        Returns the appropriate buffers based on the protocol.
+        Returns the appropriate buffers for a given protocol.
 
         Args:
-            protocol (int): Protocol number (TCP/UDP).
+            protocol (int): The protocol number.
 
         Returns:
-            Tuple[Dict[FlowKeyType, List[np.ndarray]], Set[FlowKeyType]]: Tuple of flows and checked flows.
+            Tuple[Dict[FlowKeyType, List[np.ndarray]], Set[FlowKeyType]]: The buffers for the specified protocol.
         """
         return (self.flows_tcp, self.checked_tcp) if protocol == 6 else (self.flows_udp, self.checked_udp)
 

@@ -155,15 +155,6 @@ def plot_anomaly_score_dists(model_name, test_scores, labels, name, threshold, a
 
 
 def plot_multiclass_anomaly_scores(test_scores, labels, name, threshold, add_legend=False):
-    """
-    Plot the anomaly scores for multiclass data, with each class in a different color.
-
-    Args:
-        test_scores (np.ndarray): The anomaly scores.
-        labels (np.ndarray): The multiclass labels.
-        threshold (float): The threshold for anomaly detection.
-        add_legend (bool, optional): Whether to add a legend to the plot. Defaults to False.
-    """
     unique_labels = np.unique(labels)
 
     # Define colors for each class - adjust this as needed
