@@ -7,6 +7,8 @@ from sniffer import SnifferPcap
 
 def main():
     args = SnifferOptions()
+    args.parse_options()
+
     snf = SnifferPcap(args)
     # snf = Sniffer(args)
     snf.set_pcap_path('datasets/TII-SSRC-23/pcap/benign/video/rtp.pcap')

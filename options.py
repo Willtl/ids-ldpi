@@ -10,7 +10,6 @@ class SnifferOptions:
         self.timeout: int = 120
         self.cleaning_cycle: int = 60
         self.debug: bool = True
-        self.parse_options()
 
     def parse_options(self):
         parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -48,9 +47,6 @@ class LDPIOptions:
 
         # Inference related arguments
         self.threshold_type: str = 'max'
-
-        # Parse the options
-        self.parse_options()
 
     def parse_options(self):
         parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)

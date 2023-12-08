@@ -214,6 +214,7 @@ class LightDeepPacketInspection(SnifferSubscriber):
 
         # Initialize LDPIOptions
         self.args = LDPIOptions()
+        self.args.parse_options()
 
         # Initialize the trained model with specified parameters
         self.trained_model = TrainedModel(self.args, quantized=False)
