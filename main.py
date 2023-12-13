@@ -1,8 +1,9 @@
+import time
 from typing import NoReturn
 
-from ldpi import LightDeepPacketInspection
+from ldpi.inference import LightDeepPacketInspection
 from options import SnifferOptions
-from sniffer import Sniffer
+from sniffer.sniffer import Sniffer
 
 
 def main() -> NoReturn:
@@ -21,9 +22,6 @@ def main() -> NoReturn:
     # Initialize command line arguments
     args = SnifferOptions()
     args.parse_options()
-
-    # Raise exception meanwhile 'pypcap' library is not availability
-    raise Exception("Execution blocked: 'pypcap' library is not yet integrated into the HardenedOS environment. Please use the debug version of this script (main_debug.py) for now.")
 
     # Initialize Sniffer and LightDeepPacketInspection instances
     snf = Sniffer(args)
