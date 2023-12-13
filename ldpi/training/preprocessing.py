@@ -2,7 +2,7 @@ import glob
 import logging
 import os
 from queue import Queue
-from typing import Dict, Tuple, List
+from typing import Dict, Tuple, List, NoReturn
 
 import dpkt
 import numpy as np
@@ -26,7 +26,7 @@ class PreprocessingSnifferPcap(Sniffer):
         max_samples_per_pcap (int): Maximum number of samples to process per pcap file.
     """
 
-    def __init__(self, args: SnifferOptions) -> None:
+    def __init__(self, args: SnifferOptions) -> NoReturn:
         """
         Initialize the PreprocessingSnifferPcap with given arguments.
 
@@ -38,7 +38,7 @@ class PreprocessingSnifferPcap(Sniffer):
         self.subscribers: List[LDPIPreProcessing] = []
         self.max_samples_per_pcap: int = 5000
 
-    def sniff(self) -> None:
+    def sniff(self) -> NoReturn:
         """
         Start the sniffing process, which involves processing pcap files from specified directories.
         Raises ValueError if subscribers list is empty.
@@ -81,7 +81,7 @@ class PreprocessingSnifferPcap(Sniffer):
 
         return dataset_basename, benign_files, malicious_files
 
-    def _set_current_pcap_path(self, pcap_path: str) -> None:
+    def _set_current_pcap_path(self, pcap_path: str) -> NoReturn:
         """
         Sets the current pcap path based on the provided pcap file path.
 
@@ -96,7 +96,7 @@ class PreprocessingSnifferPcap(Sniffer):
             self.current_pcap_path = f'{storing_path}/{filename}/'
             self.subscribers[0].set_current_path(self.current_pcap_path)
 
-    def _process_pcap_file(self, pcap_path: str) -> None:
+    def _process_pcap_file(self, pcap_path: str) -> NoReturn:
         """
         Processes a single pcap file.
 
@@ -135,7 +135,7 @@ class PreprocessingSnifferPcap(Sniffer):
 class LDPIPreProcessing(SnifferSubscriber):
     """ LDPI preprocessing routines """
 
-    def __init__(self) -> None:
+    def __init__(self) -> NoReturn:
         """
         Initialize the LDPIPreProcessing instance with default values.
         """
@@ -149,13 +149,13 @@ class LDPIPreProcessing(SnifferSubscriber):
         self.sample_counter: int = 0
         self.current_path: str = ""
 
-    def run(self) -> None:
+    def run(self) -> NoReturn:
         """
         Placeholder for the main logic to run the LDPIPreProcessing instance.
         """
         pass
 
-    def new_packet(self, flow_key: Tuple[bytes, int, bytes, int], protocol: int, timestamp: int, ip: dpkt.ip.IP) -> None:
+    def new_packet(self, flow_key: Tuple[bytes, int, bytes, int], protocol: int, timestamp: int, ip: dpkt.ip.IP) -> NoReturn:
         """
         Processes a new packet received from the network.
 
@@ -195,7 +195,7 @@ class LDPIPreProcessing(SnifferSubscriber):
             del flows[flow_key]
 
     # Remove flows entries in case of teardown
-    def teardown(self, flow_key: Tuple[bytes, int, bytes, int], protocol: int) -> None:
+    def teardown(self, flow_key: Tuple[bytes, int, bytes, int], protocol: int) -> NoReturn:
         """
         Handles the teardown of a network flow, removing it from active monitoring.
 
@@ -285,7 +285,7 @@ class LDPIPreProcessing(SnifferSubscriber):
         """
         return (self.flows_tcp, self.c_tcp) if protocol == 6 else (self.flows_udp, self.c_udp)
 
-    def set_current_path(self, storing_path: str) -> None:
+    def set_current_path(self, storing_path: str) -> NoReturn:
         """
         Sets the current path for storing processed data and resets internal data structures.
 
@@ -350,7 +350,7 @@ def trim_or_pad_packet(packet: bytes, length: int) -> np.ndarray:
     return np_buff
 
 
-def main() -> None:
+def main() -> NoReturn:
     """
     Main function to initialize and run the preprocessing sniffer for pcap files.
 

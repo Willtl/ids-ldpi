@@ -1,6 +1,8 @@
 import argparse
 import warnings
 
+from typing import NoReturn
+
 
 class SnifferOptions:
     """
@@ -25,7 +27,7 @@ class SnifferOptions:
         self.cleaning_cycle: int = 60
         self.debug: bool = True
 
-    def parse_options(self) -> None:
+    def parse_options(self) -> NoReturn:
         """
         Parse command-line arguments and update instance attributes.
 
@@ -81,7 +83,7 @@ class LDPIOptions:
         # Inference related arguments
         self.threshold_type: str = 'max'
 
-    def parse_options(self) -> None:
+    def parse_options(self) -> NoReturn:
         """
         Parse command-line arguments and update instance attributes.
 
@@ -116,4 +118,5 @@ class LDPIOptions:
 
         # Issue a warning if 'n' or 'l' are changed from their default values
         if self.n != 4 or self.l != 60:
-            warnings.warn("Changing 'n' or 'l' requires retraining/fine-tuning the model. The only available pretrained model on TII-SSRC-23 dataset is with 4 packets of 60 bytes each.")
+            warnings.warn(
+                "Changing 'n' or 'l' requires retraining/fine-tuning the model. The only available pretrained model on TII-SSRC-23 dataset is with 4 packets of 60 bytes each.")

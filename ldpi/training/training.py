@@ -1,6 +1,6 @@
 import os
 import time
-from typing import Optional, Tuple, Dict
+from typing import Optional, Tuple, Dict, NoReturn
 
 import numpy as np
 import torch
@@ -25,7 +25,7 @@ class ContrastivePretrainer:
     Class for contrastive pretraining.
     """
 
-    def __init__(self, args: LDPIOptions, model: ResCNNContrastive, data_loader: DataLoader, initial_learning_rate: float = 0.1, warmup_epochs: int = 100) -> None:
+    def __init__(self, args: LDPIOptions, model: ResCNNContrastive, data_loader: DataLoader, initial_learning_rate: float = 0.1, warmup_epochs: int = 100) -> NoReturn:
         """
         Initialize the ContrastivePretrainer.
 
@@ -73,7 +73,7 @@ class ContrastivePretrainer:
 
                 self._update_progress_bar(progress_bar, epoch, batch_count, total_loss)
 
-    def _apply_warmup(self, current_epoch: int) -> None:
+    def _apply_warmup(self, current_epoch: int) -> NoReturn:
         """
         Apply learning rate warmup.
 
@@ -136,7 +136,7 @@ class ContrastivePretrainer:
         view_1, view_2 = view_1.to(self.device), view_2.to(self.device)
         return view_1.unsqueeze(1), view_2.unsqueeze(1)
 
-    def _update_progress_bar(self, progress_bar: tqdm, epoch: int, batch_count: int, total_loss: float) -> None:
+    def _update_progress_bar(self, progress_bar: tqdm, epoch: int, batch_count: int, total_loss: float) -> NoReturn:
         """
         Update the training progress bar.
 
@@ -157,7 +157,7 @@ class Trainer:
     A class for training and testing a model.
     """
 
-    def __init__(self, ) -> None:
+    def __init__(self, ) -> NoReturn:
         """
         Initializes the Trainer class.
         """
@@ -171,7 +171,7 @@ class Trainer:
         self.best_sep_score = None
         self.best_model_state = None
 
-    def pretrain(self) -> None:
+    def pretrain(self) -> NoReturn:
         """
         Pretrains the model.
         """
@@ -199,7 +199,7 @@ class Trainer:
         loader = data.get_pretrain_dataloader(dataset='TII-SSRC-23', batch_size=self.args.batch_size, contrastive=False, shuffle=False, drop_last=False)
         self._init_center_c(loader)
 
-    def train(self, eta: float = 1.0, eps: float = 1e-10, per_validation: int = 5) -> None:
+    def train(self, eta: float = 1.0, eps: float = 1e-10, per_validation: int = 5) -> NoReturn:
         """
         Trains the model.
 
@@ -372,7 +372,7 @@ class Trainer:
         output_path = os.path.join(output_folder, 'scripted_quantized_model.pth')
         torch.jit.save(scripted_quantized_model, output_path)
 
-    def _init_center_c(self, loader: DataLoader, apply_threshold: bool = False, eps: float = 0.01) -> None:
+    def _init_center_c(self, loader: DataLoader, apply_threshold: bool = False, eps: float = 0.01) -> NoReturn:
         """
         Initializes the center vector.
 
@@ -487,7 +487,7 @@ class Trainer:
         epoch_train_time = time.time() - epoch_start_time
         print(f'| Epoch: {epoch + 1:03}/{self.args.epochs:03} | Train Time: {epoch_train_time:.3f}s | Train Loss: {epoch_loss / n_batches:.6f} | LR: {current_lr}')
 
-    def _validate_and_save_model(self, epoch: int, per_validation: int) -> None:
+    def _validate_and_save_model(self, epoch: int, per_validation: int) -> NoReturn:
         """
         Periodically validates and saves the best model based on detection rates and separation score.
 
@@ -558,7 +558,7 @@ class Trainer:
         self.center = self.center.to(self.device)
 
 
-def main() -> None:
+def main() -> NoReturn:
     """
     Main function to perform training, testing, tracing, and quantization of the model.
     """

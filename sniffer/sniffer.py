@@ -1,7 +1,7 @@
 import logging
 import threading
 import time
-from typing import List, Optional, Tuple, Dict
+from typing import List, Optional, Tuple, Dict, NoReturn
 
 import dpkt
 import netifaces as ni
@@ -52,7 +52,7 @@ class Sniffer(ModuleInterface):
         # Set up threading to run sniff() in a separate thread
         self.thread = threading.Thread(target=self.sniff)
 
-    def run(self, daemon: bool = True) -> None:
+    def run(self, daemon: bool = True) -> NoReturn:
         """Starts the sniffer in a separate thread and starts the subscribers.
 
         Args:
@@ -63,7 +63,7 @@ class Sniffer(ModuleInterface):
         self.start_subscribers()
 
     # @abstractmethod
-    def sniff(self) -> None:
+    def sniff(self) -> NoReturn:
         """Core sniffing method that captures packets and processes them."""
         self.local_ip = ni.ifaddresses(self.args.interface)[ni.AF_INET][0]['addr']
         sniffer = pcap.pcap(name=self.args.interface, promisc=False, immediate=True, timestamp_in_ns=True)
@@ -77,7 +77,7 @@ class Sniffer(ModuleInterface):
                 break
             self.process_packet(ts, buf)
 
-    def process_packet(self, ts: int, buf: bytes, index: Optional[int] = -1) -> None:
+    def process_packet(self, ts: int, buf: bytes, index: Optional[int] = -1) -> NoReturn:
         """Processes each captured packet.
 
         Args:
@@ -100,7 +100,7 @@ class Sniffer(ModuleInterface):
         except dpkt.dpkt.NeedData:
             logging.warning(f'Packet {index} in PCAP file is truncated')
 
-    def unpack_ip(self, eth: dpkt.ethernet.Ethernet, timestamp) -> None:
+    def unpack_ip(self, eth: dpkt.ethernet.Ethernet, timestamp) -> NoReturn:
         """Unpacks IP packets and handles different protocols.
 
         Args:
@@ -275,12 +275,12 @@ class Sniffer(ModuleInterface):
         self.subscribers.append(subscriber)
         return True
 
-    def start_subscribers(self) -> None:
+    def start_subscribers(self) -> NoReturn:
         """Starts all registered subscribers."""
         for subscriber in self.subscribers:
             subscriber.start()
 
-    def report_packet(self, flow_key: FlowKeyType, protocol: int, timestamp: int, ip: dpkt.ip.IP) -> None:
+    def report_packet(self, flow_key: FlowKeyType, protocol: int, timestamp: int, ip: dpkt.ip.IP) -> NoReturn:
         """Reports a new packet to all subscribers.
 
         Args:
@@ -292,7 +292,7 @@ class Sniffer(ModuleInterface):
         for subscriber in self.subscribers:
             subscriber.new_packet(flow_key, protocol, timestamp, ip)
 
-    def report_teardown(self, flow_key: FlowKeyType, protocol: int) -> None:
+    def report_teardown(self, flow_key: FlowKeyType, protocol: int) -> NoReturn:
         """Reports the teardown of a flow to all subscribers.
 
         Args:
@@ -322,7 +322,7 @@ class SnifferPcap(Sniffer):
         super(SnifferPcap, self).__init__(args)
         self._current_pcap_path: str = ''
 
-    def set_pcap_path(self, path: str) -> None:
+    def set_pcap_path(self, path: str) -> NoReturn:
         """Sets the path of the pcap file to be processed.
 
         Args:
@@ -330,7 +330,7 @@ class SnifferPcap(Sniffer):
         """
         self._current_pcap_path = path
 
-    def sniff(self, show_tqdm: bool = True) -> None:
+    def sniff(self, show_tqdm: bool = True) -> NoReturn:
         """Processes packets from a pcap file.
 
         Args:

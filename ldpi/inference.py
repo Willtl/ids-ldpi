@@ -1,7 +1,7 @@
 import os
 import threading
 import time
-from typing import Dict, Set, Optional, Tuple, List
+from typing import Dict, Set, Optional, Tuple, List, NoReturn
 
 import dpkt
 import numpy as np
@@ -31,7 +31,7 @@ class TrainedModel:
         store_models_path (str): Path to store the models.
     """
 
-    def __init__(self, args: LDPIOptions, quantized: bool = False, backend: str = 'qnnpack', batch_size: int = 32):
+    def __init__(self, args: LDPIOptions, quantized: bool = False, backend: str = 'qnnpack', batch_size: int = 32) -> NoReturn:
         """
         Initializes the TrainedModel with specified arguments.
 
@@ -59,7 +59,7 @@ class TrainedModel:
 
         self.chosen_threshold: float = self._initialize_threshold()
 
-    def _init_model(self) -> None:
+    def _init_model(self) -> NoReturn:
         """
         Initializes the model by loading the pre-trained model and associated data.
 
@@ -198,7 +198,7 @@ class LightDeepPacketInspection(SnifferSubscriber):
         thread (threading.Thread): The thread running the analyze_flows method.
     """
 
-    def __init__(self) -> None:
+    def __init__(self) -> NoReturn:
         """
         Initializes the LightDeepPacketInspection instance.
         """
@@ -223,7 +223,7 @@ class LightDeepPacketInspection(SnifferSubscriber):
         self.thread = threading.Thread(target=self.analyze_flows)
         self.thread.daemon = True
 
-    def run(self) -> None:
+    def run(self) -> NoReturn:
         """
         Starts the threading process for analyzing network flows.
         """
@@ -244,7 +244,7 @@ class LightDeepPacketInspection(SnifferSubscriber):
 
             time.sleep(0.1)
 
-    def _black_list_flows(self, keys: List[FlowKeyType], anomalies: torch.Tensor) -> None:
+    def _black_list_flows(self, keys: List[FlowKeyType], anomalies: torch.Tensor) -> NoReturn:
         """
         Updates the blacklist based on the anomaly detection results.
 
@@ -261,7 +261,7 @@ class LightDeepPacketInspection(SnifferSubscriber):
             else:
                 print(Color.OKGREEN + f'No anomaly detected in flow {flow_key_to_str(key)}' + Color.ENDC)
 
-    def new_packet(self, flow_key: FlowKeyType, protocol: int, timestamp: int, ip: dpkt.ip.IP) -> None:
+    def new_packet(self, flow_key: FlowKeyType, protocol: int, timestamp: int, ip: dpkt.ip.IP) -> NoReturn:
         """
         Processes new packets by appending them to the corresponding flows.
 
@@ -312,7 +312,7 @@ class LightDeepPacketInspection(SnifferSubscriber):
             # print(Color.OKBLUE + f'{str_key} queued for detection (RDY) ({self.to_process.qsize()})' + Color.ENDC)
 
     # Remove flows entries in case of teardown
-    def teardown(self, flow_key: FlowKeyType, protocol: int) -> None:
+    def teardown(self, flow_key: FlowKeyType, protocol: int) -> NoReturn:
         """
         Removes a flow from processing in case of a teardown.
 

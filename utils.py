@@ -2,7 +2,7 @@ import socket
 import threading
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Tuple, Union, Optional
+from typing import Tuple, Union, Optional, NoReturn
 
 import dpkt
 
@@ -26,21 +26,21 @@ class ModuleInterface(ABC, threading.Thread):
         self.thread: Optional[threading.Thread] = None
 
     @abstractmethod
-    def run(self) -> None:
+    def run(self) -> NoReturn:
         """Starts the module's functionality in a separate thread.
 
         This method should be overridden to define the module's main behavior.
         """
         self.thread.start()
 
-    def terminate(self) -> None:
+    def terminate(self) -> NoReturn:
         """Terminates the module.
 
         This method handles the cleanup and resource deallocation for the module.
         """
         del self
 
-    def stop(self) -> None:
+    def stop(self) -> NoReturn:
         """Stops the module's thread.
 
         Signals the thread to stop and waits for it to join.
@@ -71,7 +71,7 @@ class SnifferSubscriber(ModuleInterface):
         super(SnifferSubscriber, self).__init__()
 
     @abstractmethod
-    def new_packet(self, flow_key: FlowKeyType, protocol: int, timestamp: int, ip: dpkt.ip.IP) -> None:
+    def new_packet(self, flow_key: FlowKeyType, protocol: int, timestamp: int, ip: dpkt.ip.IP) -> NoReturn:
         """Handles a new packet event from the sniffer.
 
         This method should be overridden to define behavior upon receiving a new packet.
@@ -85,7 +85,7 @@ class SnifferSubscriber(ModuleInterface):
         print('new packet')
 
     @abstractmethod
-    def teardown(self, flow_key: FlowKeyType, protocol: int) -> None:
+    def teardown(self, flow_key: FlowKeyType, protocol: int) -> NoReturn:
         """Handles a flow teardown event from the sniffer.
 
         This method should be overridden to define behavior upon a flow timeout.
