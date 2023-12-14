@@ -25,7 +25,7 @@ def main() -> NoReturn:
     snf = SnifferPcap(args)
 
     # Set the path to the .pcap file
-    snf.set_pcap_path('datasets/TII-SSRC-23/pcap/benign/video/rtp.pcap')
+    snf.set_pcap_path('datasets/TII-SSRC-23/pcap/benign/video/http.pcap')
 
     # Initialize LightDeepPacketInspection
     ldpi = LightDeepPacketInspection()
