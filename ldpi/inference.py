@@ -237,23 +237,23 @@ class LightDeepPacketInspection(SnifferSubscriber):
             keys, samples = self.trained_model.prepare_tensors(self.to_process, self.black_list)
             if keys:
                 # Perform inference
-                anomalies = self.trained_model.infer(samples)
+                is_anomaly = self.trained_model.infer(samples)
 
                 # Computed blacklisted flows
-                self._black_list_flows(keys, anomalies)
+                self._black_list_flows(keys, is_anomaly)
 
             time.sleep(0.1)
 
-    def _black_list_flows(self, keys: List[FlowKeyType], anomalies: torch.Tensor) -> NoReturn:
+    def _black_list_flows(self, keys: List[FlowKeyType], is_anomaly: torch.Tensor) -> NoReturn:
         """
         Updates the blacklist based on the anomaly detection results.
 
         Args:
             keys (List[FlowKeyType]): List of flow keys.
-            anomalies (torch.Tensor): Tensor indicating whether each flow is an anomaly.
+            is_anomaly (torch.Tensor): Tensor indicating whether each flow is an anomaly.
         """
         # Process each key and corresponding anomaly detection result
-        for key, is_anomaly in zip(keys, anomalies):
+        for key, is_anomaly in zip(keys, is_anomaly):
             if is_anomaly:
                 # If anomaly detected, add the source IP to the blacklist
                 self.black_list.add(key[0])

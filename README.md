@@ -1,4 +1,4 @@
-# README for Lightweight Deep Packet Inspection (LDPI)
+# Lightweight Deep Packet Inspection (LDPI)
 
 ## Introduction
 
