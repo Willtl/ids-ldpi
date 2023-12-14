@@ -58,7 +58,6 @@ class TestSniffer:
                         mock_unpack_ip.assert_called_with(mock_eth, 123456789)
             else:
                 sniffer.process_packet(123456789, mock_buf)
-                # Assert that unpack_ip is not called and early return is taken
 
     @patch('dpkt.ethernet.Ethernet')
     @patch('logging.warning')
@@ -67,4 +66,3 @@ class TestSniffer:
         mock_ethernet.side_effect = dpkt.dpkt.NeedData
         sniffer.process_packet(123456789, b'')
         mock_logging.assert_called_once_with('Packet -1 in PCAP file is truncated')
-
