@@ -18,7 +18,7 @@ class TestSniffer:
 
     def test_initialization(self, sniffer, mock_options):
         assert sniffer.args == mock_options
-        assert sniffer.timeout_ns == int(mock_options.timeout * 1e+9)  # check if conversion to ns is correct
+        assert sniffer.timeout_ns == int(mock_options.timeout * 1e+9)
         assert isinstance(sniffer.flows_tcp, dict)
         assert isinstance(sniffer.flows_udp, dict)
 
