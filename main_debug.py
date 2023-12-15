@@ -26,6 +26,8 @@ def main() -> NoReturn:
 
     # Set the path to the .pcap file
     snf.set_pcap_path('datasets/TII-SSRC-23/pcap/benign/video/http.pcap')
+    # snf.set_pcap_path('datasets/TII-SSRC-23/pcap/benign/background/background_comms_220.pcap')
+    # snf.set_pcap_path('datasets/TII-SSRC-23/pcap/malicious/bruteforce/bruteforce_http.pcap')
 
     # Initialize LightDeepPacketInspection
     ldpi = LightDeepPacketInspection()
