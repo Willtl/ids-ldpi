@@ -1,8 +1,4 @@
-# Lightweight Deep Packet Inspection (LDPI)
-
-## Introduction
-
-## Introduction
+# Lightweight Deep Network Anomaly Detection 
 
 LDPI is a plugin within the Comm. Sleeve's mesh_com [repository](https://github.com/tiiuae/mesh_com). It monitors network interfaces to identify deviations from expected traffic patterns using unsupervised and semi-supervised learning approaches. The system primarily relies on normal traffic data for training, though incorporating additional malicious samples is optional and can enhance the method's effectiveness.
 
