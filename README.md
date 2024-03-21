@@ -31,7 +31,7 @@ Training involves three main steps:
 
 ### Dataset Structure
 
-Your custom dataset should comply with the following strcuture within `ids-ldpi/datasets/`
+Your custom dataset should comply with the following structure within `ids-ldpi/datasets/`
 ![Dataset Structure](./images/dataset_structure.png)
 
 ## References
