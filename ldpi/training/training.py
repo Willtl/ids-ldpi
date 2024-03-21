@@ -499,6 +499,7 @@ class Trainer:
         if (epoch + 1) % per_validation == 0 or epoch < self.warmup_epochs:
             print("Validation for early stopping at epoch:", epoch + 1)
             results = self.test(plot=False)
+            print(results)
 
             max_dr = results['max']['rec']
             separation_sccore = results['separation_score']

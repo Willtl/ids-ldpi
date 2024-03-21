@@ -20,7 +20,7 @@ def main() -> NoReturn:
     - Replace the while True loop with a decision engine loop.
     """
     # Raise exception meanwhile libraries are not available
-    raise Exception("Execution is blocked due to missing dependencies.")
+    # raise Exception("Execution is blocked due to missing dependencies.")
 
     # Initialize command line arguments
     args = SnifferOptions()
