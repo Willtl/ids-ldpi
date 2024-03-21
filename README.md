@@ -27,7 +27,7 @@ Training involves three main steps:
 
 2. **Preprocessing**: Run `ldpi/training/preprocessing.py` to preprocess your network data for training.
 
-3. **Model Training**: Execute `ldpi/training/training.py` in the same directory to train the model using the preprocessed data.
+3. **Model Training**: Execute `ldpi/training/training.py` to train the model using the preprocessed data.
 
 ### Dataset Structure
 
