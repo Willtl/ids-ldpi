@@ -19,7 +19,7 @@ Once training is completed, several thresholds are computed, such as the 99th pe
 
 ## Training/Fine-tuning On Your Dataset
 
-You can adapt the model to your network environment by retraining it with your data. Delete all models within the `ldpi/training/output/` folder. Note: Deleting `pretrained_model.pth` is optional. Place your `.pcap` files, representing normal and attack data (if available), in the `datasets` folder. To ensure compatibility, your dataset should adhere to the structure outlined below (refer to **Dataset Structure**).
+You can adapt the model to your network environment by retraining it with your data. Delete all models within the `ldpi/training/output/` folder. Note: Deleting `pretrained_model.pth` is optional. Place your `.pcap` files, representing normal and attack data (if available), in the `datasets` folder. To ensure compatibility, your dataset should adhere to the structure outlined below (refer to **Dataset Structure**). Note that the model was pre-trained with n=4; if you decide to change this parameter, all modes, including the pre-trained model, should be trained from scratch.
  
 Training involves three main steps:
 
