@@ -17,7 +17,7 @@ Subsequently, the projection head is dropped/replaced, and the model is fine-tun
 Once training is completed, several thresholds are computed, such as the 99th percentile and maximum. The threshold used during inference is configurable based on these thresholds. 
  
 
-## Training On Your Dataset
+## Training/Fine-tuning On Your Dataset
 
 You can adapt the model to your network environment by retraining it with your data. Delete all models within the `ldpi/training/output/` folder. Note: Deleting `pretrained_model.pth` is optional. Place your `.pcap` files, representing normal and attack data (if available), in the `datasets` folder. To ensure compatibility, your dataset should adhere to the structure outlined below (refer to **Dataset Structure**).
  
